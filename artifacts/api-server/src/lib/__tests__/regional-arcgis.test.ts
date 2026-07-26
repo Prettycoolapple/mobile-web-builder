@@ -24,6 +24,29 @@ describe("regional ArcGIS planning fetchers", () => {
     vi.unstubAllGlobals();
   });
 
+  it("maps Taupō District's published Environment zone field", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/query")) {
+        return new Response(JSON.stringify({
+          features: [{ attributes: {
+            OBJECTID: 1008,
+            Zone: "Rural Lifestyle Environment",
+            ChangeReason: "Plan Change 42",
+          } }],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ fields: [] }), { status: 200 });
+    }));
+
+    await expect(fetchRegionalPlanningZone(
+      jurisdiction("taupo"), -38.6206095, 175.9763673,
+    )).resolves.toMatchObject({
+      zone_code: "Rural Lifestyle Environment",
+      zone_description: expect.stringContaining("Rural Lifestyle Environment"),
+    });
+  });
+
   it("decodes coded-value zone fields into readable regional zone descriptions", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

@@ -48,6 +48,7 @@ describe("regional planning provider registry", () => {
       "tauranga",
       "western-bay",
       "whakatane",
+      "taupo",
       "rotorua",
       "napier",
       "southland",
@@ -98,6 +99,7 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: -37.7720624, lng: 176.4995595, address: "481 Pukehina Parade" }).providerId).toBe("western-bay");
     expect(resolvePlanningJurisdiction({ lat: -37.6878, lng: 176.1651, address: "Tauranga" }).providerId).not.toBe("western-bay");
     expect(resolvePlanningJurisdiction({ lat: -38.1251, lng: 176.2438, address: "85 Whittaker Road, Koutu, Rotorua" }).providerId).toBe("rotorua");
+    expect(resolvePlanningJurisdiction({ lat: -38.6206095, lng: 175.9763673, address: "302 Whangamata Road, Kinloch, Taupō District" }).providerId).toBe("taupo");
     expect(resolvePlanningJurisdiction({ lat: -38.0166, lng: 176.7157, address: "1134 Braemar Road, Rotoma" }).providerId).toBe("whakatane");
     expect(resolvePlanningJurisdiction({ lat: -38.0156, lng: 176.7193, address: "1140 Braemar Road, Rotorua" }).providerId).toBe("whakatane");
     expect(resolvePlanningJurisdiction({ lat: -38.1251, lng: 176.2438, address: "85 Whittaker Road, Whakatane" }).providerId).toBe("rotorua");
@@ -124,6 +126,7 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "Fitzherbert Street, Featherston" }).providerId).toBe("wairarapa");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "37 Tieko Street, Otaihanga, Kāpiti Coast" }).providerId).toBe("kapiti");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "85 Whittaker Road, Koutu, Rotorua" }).providerId).toBe("rotorua");
+    expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "302 Whangamata Road, Kinloch, Taupō District" }).providerId).toBe("taupo");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "16 Lodge Avenue, Mount Maunganui, Tauranga City" }).providerId).toBe("tauranga");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "30 Athenree Road, Athenree, Western Bay of Plenty" }).providerId).toBe("western-bay");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "481 Pukehina Parade, Pukehina Beach" }).providerId).toBe("western-bay");
@@ -167,6 +170,7 @@ describe("regional planning provider registry", () => {
       "kapiti",
       "wellington",
       "dunedin",
+      "taupo",
       "tauranga",
       "western-bay",
       "whakatane",

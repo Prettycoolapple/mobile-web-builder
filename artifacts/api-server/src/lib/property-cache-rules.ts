@@ -59,7 +59,7 @@ export function cachedRawNeedsRegionalZoneRefresh(rawData: RawPropertyData): boo
   // live Manawatu reacquisition after deployment.
   if (
     rawData.planning_provider?.providerId === "unsupported"
-    && (providerId === "manawatu" || providerId === "napier" || providerId === "tauranga" || providerId === "kapiti" || providerId === "selwyn")
+    && (providerId === "manawatu" || providerId === "napier" || providerId === "tauranga" || providerId === "kapiti" || providerId === "selwyn" || providerId === "taupo")
   ) {
     return true;
   }
@@ -75,6 +75,9 @@ export function cachedRawNeedsRegionalZoneRefresh(rawData: RawPropertyData): boo
 export function cachedRawNeedsRegionalPropertyHistoryRefresh(rawData: RawPropertyData): boolean {
   const providerId = cachedPlanningProviderId(rawData);
   const history = rawData.property_history;
+  if (providerId === "taupo") {
+    return history?.land_area_sqm == null;
+  }
   if (providerId === "whakatane") {
     // Whakatane's rating layer is occasionally slow from Vercel.  A complete
     // PropertyValue record is an acceptable persisted fallback and prevents a

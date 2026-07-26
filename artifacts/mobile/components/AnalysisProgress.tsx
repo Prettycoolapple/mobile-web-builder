@@ -86,10 +86,6 @@ export function AnalysisProgress({ retryLabel }: Props) {
         />
       </View>
 
-      <Text style={[styles.hint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-        {t("search.analysis_up_to_five_min")}
-      </Text>
-
       <Text
         key={retryLabel ?? stepIndex}
         style={[styles.step, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}
@@ -135,10 +131,6 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 14,
-  },
-  hint: {
-    fontSize: 12,
-    lineHeight: 17,
   },
   track: {
     height: 4,

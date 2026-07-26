@@ -5,6 +5,7 @@ import {
   addressesLikelyMatch,
   extractCombinedListingAddressParts,
   extractListingFactAreaSqm,
+  fetchRealestatePropertyProfileForAddress,
   findLocationInTextViaIndex,
   findSuburbId,
   looksLikeCombinedListingAddress,
@@ -422,5 +423,100 @@ describe("realestate-api address matching", () => {
     expect(
       addressesLikelyMatch("8 Hampton Drive", "8 Hampton Drive Flat 2"),
     ).toBe(true);
+  });
+});
+
+describe("realestate-api exact property profile recovery", () => {
+  it("recovers last verified sold-listing facts for an exact suffixed address", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          propertySearch: {
+            nodes: [{
+              shortId: "lsz5clpw",
+              address: { fullAddress: "1B Highview Terrace, Queenstown Central, Queenstown" },
+            }],
+          },
+        },
+      })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          propertyById: {
+            shortId: "lsz5clpw",
+            websiteSlug: "/property/1b-highview-terrace-queenstown/lsz5clpw",
+            address: {
+              fullAddress: "1B Highview Terrace, Queenstown Central, Queenstown",
+              streetAddress: "1B Highview Terrace",
+              suburb: "Queenstown Central",
+              latitude: -45.0297813,
+              longitude: 168.6828003,
+            },
+            bedroomsTotalCount: 0,
+            bathroomsTotalCount: 2,
+            floorArea: 0,
+            landArea: 0,
+            buildingAge: 0,
+            category: "Unit",
+            photoPrimary: { baseUrl: "/listings/42990668/photo" },
+            currentListings: [],
+            councilEvaluations: null,
+          },
+        },
+      })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          id: "42990668",
+          attributes: {
+            address: {
+              "full-address": "1B Highview Terrace, Queenstown, Queenstown",
+              latitude: "-45.0298187",
+              longitude: "168.6828436",
+            },
+            "website-full-url": "https://www.realestate.co.nz/42990668/residential/sale/1b-highview-terrace",
+            "listing-status": "sold",
+            "bedroom-count": 3,
+            "bathrooms-total-count": 2,
+            "floor-area": 120,
+            "floor-area-unit": "sqm",
+            "land-area": 0,
+            "land-area-unit": "sqm",
+            photos: [],
+          },
+        },
+      })))
+      .mockResolvedValueOnce(new Response("<html></html>", {
+        headers: { "content-type": "text/html" },
+      }));
+
+    await expect(
+      fetchRealestatePropertyProfileForAddress("1B Highview Terrace, Queenstown"),
+    ).resolves.toMatchObject({
+      address: "1B Highview Terrace, Queenstown Central, Queenstown",
+      bedrooms: 3,
+      bathrooms: 2,
+      floorArea: 120,
+      propertyType: "Unit",
+      listingStatus: "sold",
+      lat: -45.0297813,
+      lng: 168.6828003,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("never substitutes the unsuffixed parent profile for a requested child", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        propertySearch: {
+          nodes: [{
+            shortId: "parent",
+            address: { fullAddress: "1 Highview Terrace, Queenstown Central, Queenstown" },
+          }],
+        },
+      },
+    })));
+
+    await expect(
+      fetchRealestatePropertyProfileForAddress("1B Highview Terrace, Queenstown"),
+    ).resolves.toBeNull();
   });
 });

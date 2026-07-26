@@ -121,7 +121,7 @@ export default function NewsArticleScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 }, header: { minHeight: 58, paddingHorizontal: 12, paddingBottom: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  headerButton: { width: 40, height: 40, alignItems: "center", justifyContent: "center" }, headerTitle: { flex: 1, textAlign: "center", color: "#FAFAF9", fontFamily: "DM_Sans_700Bold", fontSize: 17 },
+  headerButton: { width: 40, height: 40, alignItems: "center", justifyContent: "center" }, headerTitle: { flex: 1, textAlign: "center", color: "#FAFAF9", fontFamily: "SpaceGrotesk_700Bold", fontSize: 17, letterSpacing: -0.4 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 28 }, error: { fontFamily: "DM_Sans_600SemiBold", fontSize: 17, textAlign: "center" }, backText: { fontFamily: "DM_Sans_700Bold" },
   content: { paddingHorizontal: 20, paddingTop: 24 }, date: { fontFamily: "DM_Sans_600SemiBold", fontSize: 13, marginBottom: 10 }, title: { fontFamily: "Fraunces_600SemiBold", fontSize: 31, lineHeight: 38 }, rule: { height: StyleSheet.hairlineWidth, marginVertical: 22 },
   textBlock: { marginBottom: 14 }, image: { width: "100%", borderRadius: 12, marginVertical: 12, backgroundColor: "#ddd" },

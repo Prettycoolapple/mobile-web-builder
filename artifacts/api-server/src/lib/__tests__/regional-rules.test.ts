@@ -1216,4 +1216,32 @@ describe("regional planning rule status", () => {
       verifiedMinimumLotSqm: 200_000,
     });
   });
+
+  it("models Taupō Rural Lifestyle subdivision and enables ROI", () => {
+    const provider = { providerId: "taupo" as const, providerName: "Taupō District Council planning provider" };
+    const zone = {
+      zone_code: "Rural Lifestyle Environment",
+      zone_description: "Rural Lifestyle Environment",
+      min_lot_size_sqm: null,
+      raw_zone: JSON.stringify({ ChangeReason: "Plan Change 42" }),
+    };
+
+    expect(regionalPlanningRuleStatus(provider, zone, 47_130, [])).toMatchObject({
+      subdivisionRules: "standard_yield_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: true,
+      automaticRoiAllowed: true,
+      regionalZoneCode: "TDC_RLE",
+      verifiedMinimumLotSqm: 20_000,
+    });
+    expect(calculateRegionalPotentialLots({
+      provider,
+      zone,
+      landAreaSqm: 47_130,
+      overlays: [],
+    })).toMatchObject({
+      effectiveMinimumLotSqm: 20_000,
+      lotResult: { lots: 2, sqm_per_lot: 23_565, min_lot_size: 20_000 },
+    });
+  });
 });

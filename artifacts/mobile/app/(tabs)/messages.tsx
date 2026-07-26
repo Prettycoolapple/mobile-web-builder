@@ -281,7 +281,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontFamily: "SpaceGrotesk_700Bold",
-    fontSize: 22,
+    fontSize: 17,
     color: "#FAFAF9",
     letterSpacing: -0.4,
   },

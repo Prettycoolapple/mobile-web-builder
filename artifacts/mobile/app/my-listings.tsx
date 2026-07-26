@@ -276,7 +276,7 @@ export default function MyListingsScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.headerBack} activeOpacity={0.7}>
           <Feather name="arrow-left" size={22} color="rgba(250,249,246,0.8)" />
         </TouchableOpacity>
-        <Text style={[styles.headerTitle, { fontFamily: "DM_Sans_700Bold", color: "#FAFAF9" }]}>{t("listing.my_title")}</Text>
+        <Text style={[styles.headerTitle, { fontFamily: "SpaceGrotesk_700Bold", color: "#FAFAF9" }]}>{t("listing.my_title")}</Text>
         <TouchableOpacity
           style={[styles.headerAddBtn, { backgroundColor: colors.accent }]}
           onPress={() => router.push("/add-listing")}
@@ -389,7 +389,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   headerBack: { padding: 4, marginRight: 8 },
-  headerTitle: { fontSize: 17, flex: 1, textAlign: "center", color: "#FAFAF9" },
+  headerTitle: { fontSize: 17, flex: 1, textAlign: "center", color: "#FAFAF9", letterSpacing: -0.4 },
   headerAddBtn: {
     width: 34,
     height: 34,

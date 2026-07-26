@@ -21,6 +21,7 @@ export type PlanningProviderId =
   | "kapiti"
   | "wellington"
   | "dunedin"
+  | "taupo"
   | "rotorua"
   | "whakatane"
   | "western-bay"
@@ -203,6 +204,13 @@ const KAPITI_BOUNDS: Bounds = { minLat: -41.10, maxLat: -40.68, minLng: 174.82, 
 // are registered before Wellington below.
 const WELLINGTON_BOUNDS: Bounds = { minLat: -41.45, maxLat: -40.70, minLng: 174.60, maxLng: 175.35 };
 const DUNEDIN_BOUNDS: Bounds = { minLat: -46.15, maxLat: -45.55, minLng: 169.95, maxLng: 171.15 };
+// Taupō District cannot be represented safely by one rectangle without
+// swallowing parts of Rotorua Lakes, South Waikato, Waitomo and Ruapehu.
+// These conservative boxes cover its principal settlements; exact geocoder
+// district/locality text handles rural addresses outside them.
+const TAUPO_KINLOCH_BOUNDS: Bounds = { minLat: -38.88, maxLat: -38.43, minLng: 175.78, maxLng: 176.25 };
+const TAUPO_TURANGI_BOUNDS: Bounds = { minLat: -39.22, maxLat: -38.88, minLng: 175.62, maxLng: 176.12 };
+const TAUPO_MANGAKINO_BOUNDS: Bounds = { minLat: -38.58, maxLat: -38.25, minLng: 175.42, maxLng: 175.80 };
 const ROTORUA_BOUNDS: Bounds = { minLat: -38.45, maxLat: -37.85, minLng: 175.85, maxLng: 176.55 };
 const WHAKATANE_BOUNDS: Bounds = { minLat: -38.35, maxLat: -37.70, minLng: 176.55, maxLng: 177.40 };
 // Western Bay of Plenty District from Waihi Beach/Athenree through Katikati,
@@ -717,6 +725,37 @@ const providerRegistry: PlanningProvider[] = [
       /\bohope\b/,
       /\btaneatua\b/,
     ]),
+  ),
+  provider(
+    "taupo",
+    "Taupō District Council planning provider",
+    "Taupō District Council",
+    "Waikato",
+    "partial",
+    "Taupō District Plan",
+    [
+      { label: "Taupō District ePlan", url: "https://maps.taupodc.govt.nz/server/rest/services/districtplan/ePlan_Server/MapServer" },
+      { label: "Taupō District environments", url: "https://maps.taupodc.govt.nz/server/rest/services/districtplan/Environment/FeatureServer" },
+      { label: "Taupō District overlays", url: "https://maps.taupodc.govt.nz/server/rest/services/districtplan/Overlay/FeatureServer" },
+      { label: "Taupō District public water assets", url: "https://maps.taupodc.govt.nz/server/rest/services/assetfinda/Water_Pipe/FeatureServer" },
+      { label: "Taupō District public wastewater assets", url: "https://maps.taupodc.govt.nz/server/rest/services/assetfinda/Wastewater_Pipe/FeatureServer" },
+      { label: "Taupō District public stormwater assets", url: "https://maps.taupodc.govt.nz/server/rest/services/assetfinda/Stormwater_Pipe/FeatureServer" },
+      { label: "Taupō District rateable land parcels", url: "https://maps.taupodc.govt.nz/server/rest/services/property/Rateable_Land_Parcel/FeatureServer" },
+    ],
+    (context) =>
+      inBounds(context, TAUPO_KINLOCH_BOUNDS)
+      || inBounds(context, TAUPO_TURANGI_BOUNDS)
+      || inBounds(context, TAUPO_MANGAKINO_BOUNDS)
+      || addressHas(context, [
+        /\btaupo district\b/,
+        /\btaupo\b/,
+        /\bkinloch\b/,
+        /\bturangi\b/,
+        /\bmangakino\b/,
+        /\bacacia bay\b/,
+        /\bwhakaroa\b/,
+        /\bwhareroa\b/,
+      ]),
   ),
   provider(
     "rotorua",

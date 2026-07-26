@@ -332,6 +332,11 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(regionalCostProfileForProvider("whangarei")).toMatchObject({ id: "whangarei-default", providerId: "whangarei" });
     expect(regionalCostProfileForProvider("nelson")).toMatchObject({ id: "nelson-default", providerId: "nelson" });
     expect(regionalCostProfileForProvider("rotorua")).toMatchObject({ id: "rotorua-default", providerId: "rotorua" });
+    expect(regionalCostProfileForProvider("taupo")).toMatchObject({
+      id: "taupo-default",
+      providerId: "taupo",
+      source: "auckland_default_pending_regional_rates",
+    });
     expect(regionalCostProfileForProvider("whakatane")).toMatchObject({ id: "whakatane-default", providerId: "whakatane" });
     expect(regionalCostProfileForProvider("western-bay")).toMatchObject({
       id: "western-bay-default",

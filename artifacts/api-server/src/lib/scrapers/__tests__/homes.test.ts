@@ -48,6 +48,7 @@ describe("Homes scraper", () => {
           floor_area: 178,
           land_area: 1082,
           decade_built: "1960",
+          ownership_type: "Freehold",
         },
       }],
     };
@@ -60,6 +61,7 @@ describe("Homes scraper", () => {
     expect(data?.land_area_sqm).toBe(1082);
     expect(data?.build_year).toBeNull();
     expect(data?.build_year_range).toBe("1960-1969");
+    expect(data?.tenureText).toBe("Freehold");
     expect(data?.address_confirmed).toBe("8 Hampton Drive, St Heliers, Auckland");
   });
 

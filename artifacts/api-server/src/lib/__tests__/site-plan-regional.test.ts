@@ -119,6 +119,35 @@ describe("regional site-plan wrapper", () => {
       .toEqual(["Wind Zone"]);
   });
 
+  it("shows Taupō three-waters and applicable planning controls for Kinloch", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isService = /assetfinda\/(?:Water|Wastewater|Stormwater)_Pipe\/FeatureServer\/0\/query/.test(url);
+      const isRoadControl = url.includes("/districtplan/ePlan_Server/MapServer/1/query");
+      return new Response(JSON.stringify({
+        features: isService || isRoadControl ? [{
+          attributes: { OBJECTID: 1, Asset_Type: "Main", Potable: "Yes", Status: "In Service" },
+          geometry: { paths: [[[175.9760, -38.6206], [175.9770, -38.6206]]] },
+        }] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const sitePlan = await buildSitePlanForReport("302 Whangamata Road, Kinloch", {
+      geocode: {
+        lat: -38.6206095,
+        lng: 175.9763673,
+        formatted: "302 Whangamata Road, Kinloch, Taupō District, Waikato",
+        suburb: "Kinloch",
+      },
+      linz_parcel: null,
+    } as RawPropertyData);
+
+    expect(sitePlan.layers.filter((layer) => layer.group === "services" && layer.available).map((layer) => layer.label).sort())
+      .toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available).map((layer) => layer.label))
+      .toContain("Road Hierarchy");
+  });
+
   it("returns one row per Manawatu service while combining PNCC and MDC public feeds", async () => {
     process.env["LINZ_BASEMAPS_API_KEY"] = "test-basemaps-key";
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {

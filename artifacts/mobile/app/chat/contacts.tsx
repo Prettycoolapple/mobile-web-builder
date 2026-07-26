@@ -285,10 +285,10 @@ const styles = StyleSheet.create({
   },
   backBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   headerTitle: {
-    fontFamily: "DM_Sans_600SemiBold",
+    fontFamily: "SpaceGrotesk_700Bold",
     fontSize: 17,
+    letterSpacing: -0.4,
     color: "#FAFAF9",
-    letterSpacing: -0.2,
   },
   searchBar: {
     flexDirection: "row",

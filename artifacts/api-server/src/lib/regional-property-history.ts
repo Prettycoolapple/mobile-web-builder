@@ -23,6 +23,8 @@ const KAPITI_PROPERTY =
 const SELWYN_PROPERTY =
   "https://gis.selwyn.govt.nz/arcgis/rest/services/SDC_Public/Property_Public/MapServer/0";
 const SELWYN_REVALUATION_YEAR = 2024;
+const TAUPO_RATEABLE_LAND =
+  "https://maps.taupodc.govt.nz/server/rest/services/property/Rateable_Land_Parcel/FeatureServer/0";
 
 type ArcGisFeature = { attributes?: Record<string, unknown> };
 
@@ -260,6 +262,63 @@ async function fetchSouthlandPropertyHistory(
         ...(linzAreaSqm ? ["land_area_sqm (from LINZ parcel)"] : []),
       ],
       sources_estimated: ["build_year", "floor_area_sqm", "property_type"],
+    };
+  } catch {
+    return emptyPropertyHistory(linzAreaSqm);
+  }
+}
+
+async function fetchTaupoPropertyHistory(
+  address: string,
+  lat: number,
+  lng: number,
+  linzAreaSqm?: number | null,
+): Promise<PropertyHistory> {
+  const url = new URL(`${TAUPO_RATEABLE_LAND}/query`);
+  url.searchParams.set("f", "json");
+  url.searchParams.set("where", "1=1");
+  url.searchParams.set("geometry", `${lng},${lat}`);
+  url.searchParams.set("geometryType", "esriGeometryPoint");
+  url.searchParams.set("inSR", "4326");
+  url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
+  url.searchParams.set(
+    "outFields",
+    "property_location,property_legal_desc,cert_of_title,valuation_id,PARCEL_AREA",
+  );
+  url.searchParams.set("returnGeometry", "false");
+
+  try {
+    const response = await fetch(url.toString(), { signal: AbortSignal.timeout(12_000) });
+    if (!response.ok) throw new Error(`Taupō property GIS HTTP ${response.status}`);
+    const data = await response.json() as {
+      features?: ArcGisFeature[];
+      error?: { message?: string };
+    };
+    if (data.error) throw new Error(`Taupō property GIS error: ${data.error.message ?? "unknown"}`);
+
+    const requestedStreet = normaliseStreetAddress(streetAddressPart(address));
+    const attrs = (data.features ?? []).find((feature) =>
+      normaliseStreetAddress(streetAddressPart(String(feature.attributes?.["property_location"] ?? ""))) === requestedStreet
+    )?.attributes;
+    if (!attrs) return emptyPropertyHistory(linzAreaSqm);
+
+    const councilAreaSqm = positiveNumber(attrs["PARCEL_AREA"]);
+    const landAreaSqm = linzAreaSqm ?? councilAreaSqm;
+    return {
+      cv_nzd: null,
+      cv_year: null,
+      build_year: null,
+      floor_area_sqm: null,
+      land_area_sqm: landAreaSqm,
+      land_area_source: linzAreaSqm ? "linz" : "taupo_council_rateable_land_gis",
+      land_area_scope: linzAreaSqm ? "parcel" : "rating_unit",
+      property_type: null,
+      sources_confirmed: landAreaSqm
+        ? [linzAreaSqm
+          ? "land_area_sqm (from LINZ parcel)"
+          : "land_area_sqm (Taupō District Council rateable land GIS)"]
+        : [],
+      sources_estimated: ["cv_nzd", "build_year", "floor_area_sqm", "property_type"],
     };
   } catch {
     return emptyPropertyHistory(linzAreaSqm);
@@ -694,6 +753,7 @@ export async function fetchRegionalPropertyHistory(
   lng: number,
   linzAreaSqm?: number | null,
 ): Promise<PropertyHistory> {
+  if (providerId === "taupo") return fetchTaupoPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId === "selwyn") return fetchSelwynPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId === "christchurch") return fetchChristchurchRatingUnit(address, linzAreaSqm);
   if (providerId === "manawatu") return fetchManawatuPropertyHistory(address, lat, lng, linzAreaSqm);

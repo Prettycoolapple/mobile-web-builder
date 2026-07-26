@@ -362,6 +362,9 @@ export interface LinzAddressSearchCandidate {
   address: string;
   id: string;
   rank: number | null;
+  /** Official LINZ address-point coordinate when the public search response supplies one. */
+  lat?: number | null;
+  lng?: number | null;
 }
 
 export async function fetchLINZAddressCandidates(
@@ -387,7 +390,13 @@ export async function fetchLINZAddressCandidates(
         continue;
       }
       const json = await resp.json() as {
-        data?: Array<{ id?: string | number; address?: string; source?: string; rank?: number }>;
+        data?: Array<{
+          id?: string | number;
+          address?: string;
+          source?: string;
+          rank?: number;
+          shape?: { type?: string; coordinates?: unknown };
+        }>;
       };
       const candidates = (json.data ?? [])
         .filter((item) => String(item.source ?? "").toLowerCase() === "address" && item.id != null && item.address)
@@ -397,10 +406,21 @@ export async function fetchLINZAddressCandidates(
         if (!candidate.id || !candidate.address) continue;
         const key = normaliseLrsAddress(candidate.address);
         if (!key || byAddress.has(key)) continue;
+        const coordinates = candidate.shape?.type === "Point" && Array.isArray(candidate.shape.coordinates)
+          ? candidate.shape.coordinates
+          : [];
+        const lng = typeof coordinates[0] === "number" && Number.isFinite(coordinates[0])
+          ? coordinates[0]
+          : null;
+        const lat = typeof coordinates[1] === "number" && Number.isFinite(coordinates[1])
+          ? coordinates[1]
+          : null;
         byAddress.set(key, {
           address: candidate.address.trim(),
           id: String(candidate.id),
           rank: typeof candidate.rank === "number" ? candidate.rank : null,
+          lat,
+          lng,
         });
         if (byAddress.size >= maxResults) return Array.from(byAddress.values());
       }

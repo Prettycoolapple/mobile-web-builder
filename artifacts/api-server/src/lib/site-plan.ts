@@ -831,8 +831,7 @@ async function regionalPlanningOverlayLayers(
   const pointGeometry = { geometry: `${geo.lng},${geo.lat}`, geometryType: "esriGeometryPoint" };
   const nearbyGeometry = envelopeGeometry(paddedBounds(coreBounds, 45, 180));
 
-  const results = await Promise.allSettled(
-    defs.map(async (def, index) => {
+  const queryDefinition = async (def: RegionalSitePlanOverlayLayer, index: number) => {
       const kind = regionalPlanningLayerKind(def);
       // Whakatane's council ArcGIS host is consistently slower from Vercel
       // than from NZ clients. Match the planning lookup's provider-specific
@@ -883,8 +882,15 @@ async function regionalPlanningOverlayLayers(
         legend: [{ label: def.name, color, kind }],
         geojson,
       };
-    }),
-  );
+  };
+
+  const results: PromiseSettledResult<SitePlanLayer | null>[] = [];
+  const maxConcurrent = providerId === "taupo" ? 6 : defs.length;
+  for (let offset = 0; offset < defs.length; offset += maxConcurrent) {
+    results.push(...await Promise.allSettled(
+      defs.slice(offset, offset + maxConcurrent).map((def, index) => queryDefinition(def, offset + index)),
+    ));
+  }
 
   const layers: SitePlanLayer[] = [];
   for (const result of results) {
@@ -986,10 +992,13 @@ async function regionalServiceLayers(bounds: SitePlanBounds, providerId: Plannin
   // utility search aligned with the 500 m LLRZ feasibility search so a
   // nearby public asset is not incorrectly presented as unavailable.
   const ruralSelwynAssets = providerId === "selwyn";
+  const ruralTaupoAssets = providerId === "taupo";
   const serviceBounds = denseTaurangaAssets
     ? paddedBounds(bounds, 45, 280)
     : ruralSelwynAssets
       ? paddedBounds(bounds, 500, 1_000)
+      : ruralTaupoAssets
+        ? paddedBounds(bounds, 1_500, 3_000)
     : paddedBounds(bounds, 200, 520);
   const geometry = envelopeGeometry(serviceBounds);
   const groups = regionalInfrastructureServiceLayers(providerId);
@@ -1428,7 +1437,7 @@ async function buildNationalSitePlanForGeo(
       // host. Fetch its compact three-waters bundle first so dozens of overlay
       // queries cannot starve a service request and leave a false unavailable
       // row in the Site Plan card.
-      if (providerId === "tauranga") {
+      if (providerId === "tauranga" || providerId === "taupo") {
         const services = await regionalServiceLayers(coreBounds, providerId).catch((err) => {
           logger.warn({ err: (err as Error).message, providerId }, "site-plan: regional service lookup failed");
           return [] as SitePlanLayer[];

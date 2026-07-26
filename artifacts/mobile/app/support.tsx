@@ -105,7 +105,7 @@ export default function SupportScreen() {
         <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7} style={styles.backBtn}>
           <Feather name="arrow-left" size={20} color="rgba(250,249,246,0.85)" />
         </TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: "rgba(250,249,246,0.95)", fontFamily: "DM_Sans_600SemiBold" }]}>
+        <Text style={[styles.headerTitle, { color: "rgba(250,249,246,0.95)", fontFamily: "SpaceGrotesk_700Bold" }]}>
           {t("support.title")}
         </Text>
         <View style={styles.backBtn} />
@@ -273,7 +273,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   backBtn: { width: 36, alignItems: "flex-start" },
-  headerTitle: { flex: 1, fontSize: 17, textAlign: "center", letterSpacing: -0.3 },
+  headerTitle: { flex: 1, fontSize: 17, textAlign: "center", letterSpacing: -0.4 },
   content: { padding: 20, gap: 0 },
   subtitle: { fontSize: 14, lineHeight: 21, marginBottom: 24 },
   fieldGroup: { marginBottom: 18 },

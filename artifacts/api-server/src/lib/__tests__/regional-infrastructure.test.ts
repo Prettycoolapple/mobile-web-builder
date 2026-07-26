@@ -105,6 +105,21 @@ describe("regional infrastructure fetchers", () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/External_ThreeWaters_Layers_v2/MapServer/14/query"))).toBe(true);
   });
 
+  it("returns Taupō District's three public pipe services for Kinloch", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      features: [{
+        attributes: { Asset_Type: "Water Main", Status: "In Service", Potable: "Yes" },
+        geometry: { paths: [[[175.9763, -38.6206], [175.9770, -38.6206]]] },
+      }],
+    }), { status: 200 })));
+
+    const result = await fetchRegionalInfrastructure("taupo", -38.6206095, 175.9763673, null);
+
+    expect(result.map((item) => item.name).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(result.every((item) => item.service_source_owner === "Taupō District Council")).toBe(true);
+    expect(result.every((item) => item.location === "on-parcel")).toBe(true);
+  });
+
   it("merges PNCC and MDC feeds into one best row for each Manawatu service", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -303,6 +318,7 @@ describe("regional infrastructure fetchers", () => {
     expect(targets.some((target) => target.providerId === "qldc" && target.serviceName === "Wastewater")).toBe(true);
     expect(targets.some((target) => target.providerId === "dunedin" && target.serviceName === "Water Supply")).toBe(true);
     expect(targets.some((target) => target.providerId === "rotorua" && target.serviceName === "Stormwater")).toBe(true);
+    expect(targets.some((target) => target.providerId === "taupo" && target.label === "Potable water pipe")).toBe(true);
     expect(targets.some((target) => target.providerId === "whakatane" && target.serviceName === "Wastewater")).toBe(true);
     expect(targets.some((target) => target.providerId === "western-bay" && target.serviceName === "Stormwater")).toBe(true);
     expect(targets.some((target) => target.providerId === "tauranga" && target.serviceName === "Water Supply")).toBe(true);

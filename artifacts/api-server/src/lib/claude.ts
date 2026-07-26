@@ -1538,6 +1538,72 @@ function buildLlmHistory(conversationHistory: Message[]) {
   }));
 }
 
+/**
+ * Report fields that are useless to the LLM but expensive in tokens — base64
+ * map overlays, photo URL lists, cached device URIs. A single report carrying
+ * these can push the follow-up prompt past the provider's context window,
+ * which fails the whole chat turn ("couldn't reach the service") rather than
+ * degrading.
+ */
+const CHAT_CONTEXT_DROP_KEYS = new Set([
+  "overlay_map_image_base64",
+  "photoUrl",
+  "photoUrls",
+  "cachedPhotoUris",
+  "cachedPhotoSignature",
+  "overlay_map_image",
+  "geometry",
+  "parcelGeometry",
+  "sitePlan",
+]);
+
+/** Character budget for the raw report JSON pinned into the chat system prompt. */
+const CHAT_REPORT_JSON_BUDGET = 60_000;
+
+/**
+ * The mobile client aborts a follow-up chat at 200s (analyse-mode chats get
+ * longer). Cap the reasoning model below the client's budget so there is still
+ * time for the fast-model fallback, and keep the worst case (primary +
+ * fallback) inside the 300s platform function limit.
+ */
+function unifiedResponseTimeouts(mode: ChatMode): { primary: number; fallback: number } {
+  return mode === "analyse" || mode === "discover"
+    ? { primary: 200_000, fallback: 45_000 }
+    : { primary: 110_000, fallback: 60_000 };
+}
+
+function stripHeavyReportFields(value: unknown, depth = 0): unknown {
+  if (Array.isArray(value)) {
+    return depth > 12 ? [] : value.map((item) => stripHeavyReportFields(item, depth + 1));
+  }
+  if (value && typeof value === "object") {
+    if (depth > 12) return {};
+    const out: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      if (CHAT_CONTEXT_DROP_KEYS.has(key)) continue;
+      // Any stray data URI / base64 blob elsewhere in the payload.
+      if (typeof val === "string" && (val.startsWith("data:") || val.length > 4_000)) continue;
+      out[key] = stripHeavyReportFields(val, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** Compact, token-bounded JSON for the "FULL REPORT JSON" prompt section. */
+function reportJsonForPrompt(currentReport: object): string {
+  let json: string;
+  try {
+    json = JSON.stringify(stripHeavyReportFields(currentReport));
+  } catch {
+    return "";
+  }
+  if (json.length <= CHAT_REPORT_JSON_BUDGET) return json;
+  // The pinned summary block above already carries every figure the answer
+  // rules depend on, so truncating the raw JSON loses detail, not accuracy.
+  return `${json.slice(0, CHAT_REPORT_JSON_BUDGET)}\n…(report JSON truncated — use the pinned data above)`;
+}
+
 export async function generateUnifiedResponse(
   messages: Message[],
   currentReport?: object,
@@ -1560,6 +1626,9 @@ export async function generateUnifiedResponse(
   const mode = overrideMode ?? detectMode(lastMessage.content);
 
   let systemWithContext = SYSTEM_PROMPT + langSuffix;
+  // Same prompt without the raw report JSON — used by the fast-model retry so a
+  // context-length or provider failure still gets the user a real answer.
+  let pinnedOnlyContext: string | null = null;
   if (currentReport) {
     const r = currentReport as Record<string, unknown>;
     const planning   = r["planning"]         as Record<string, unknown> | undefined;
@@ -1750,8 +1819,11 @@ export async function generateUnifiedResponse(
       `If you are uncertain about something not listed, say so — do not fill gaps with assumptions.\n\n` +
       `${pinnedBlock}\n\n`;
 
-    systemWithContext =
-      `${SYSTEM_PROMPT}${langSuffix}\n\n${pinnedSection}FULL REPORT JSON (reference for any detail not covered above):\n${JSON.stringify(currentReport, null, 2)}`;
+    pinnedOnlyContext = `${SYSTEM_PROMPT}${langSuffix}\n\n${pinnedSection}`;
+    const reportJson = reportJsonForPrompt(currentReport);
+    systemWithContext = reportJson
+      ? `${pinnedOnlyContext}FULL REPORT JSON (reference for any detail not covered above):\n${reportJson}`
+      : pinnedOnlyContext;
   }
 
   let userContent = lastMessage.content;
@@ -1762,6 +1834,11 @@ export async function generateUnifiedResponse(
   }
 
   const history = buildLlmHistory(conversationHistory);
+  const contents = [
+    ...history,
+    { role: "user", parts: [{ text: userContent }] },
+  ];
+  const timeouts = unifiedResponseTimeouts(mode);
 
   try {
     const response = await ai.models.generateContent({
@@ -1769,14 +1846,38 @@ export async function generateUnifiedResponse(
       config: {
         systemInstruction: systemWithContext,
         maxOutputTokens: 8192,
+        // Leave headroom under the mobile client's chat timeout so a stalled
+        // reasoner falls back below instead of the user seeing a dead turn.
+        timeoutMs: timeouts.primary,
       },
-      contents: [
-        ...history,
-        { role: "user", parts: [{ text: userContent }] },
-      ],
+      contents,
     });
     const content = response.text ?? "";
-    return { content, mode };
+    if (content.trim()) return { content, mode };
+    logger.warn({ mode }, "Unified response was empty — retrying on the fast model");
+  } catch (error) {
+    logger.warn(
+      { err: (error as Error)?.message, mode, hasReport: Boolean(currentReport) },
+      "Unified response failed on the reasoning model — retrying on the fast model",
+    );
+  }
+
+  // Fallback: the fast model with the pinned data only (no raw report JSON).
+  // Covers provider timeouts/outages on the reasoner and prompts that exceed
+  // the context window — a slightly shorter answer beats no answer at all.
+  try {
+    const response = await ai.models.generateContent({
+      model: "deepseek-chat",
+      config: {
+        systemInstruction: pinnedOnlyContext ?? systemWithContext,
+        maxOutputTokens: 4096,
+        timeoutMs: timeouts.fallback,
+      },
+      contents,
+    });
+    // An empty answer is returned as-is: callers already substitute their own
+    // "couldn't generate that" copy for empty content.
+    return { content: response.text ?? "", mode };
   } catch (error) {
     logger.error({ error }, "Failed to generate unified response");
     throw error;

@@ -10,6 +10,39 @@ describe("geocode address selection", () => {
     vi.unstubAllGlobals();
   });
 
+  it("uses an exact official LINZ address point before consumer geocoders", async () => {
+    process.env.GOOGLE_MAPS_API_KEY = "";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("public-search-caches/addresses")) {
+        return new Response(JSON.stringify({
+          data: [{
+            id: "address-16a",
+            source: "address",
+            address: "16A Example Road, Sampletown 9000",
+            rank: 1,
+            shape: {
+              type: "Point",
+              coordinates: [168.6828, -45.02978],
+            },
+          }],
+        }));
+      }
+      throw new Error(`Unexpected fallback request: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(tryGeocodeAddress("16A Example Road, Sampletown")).resolves.toEqual({
+      lat: -45.02978,
+      lng: 168.6828,
+      formatted: "16A Example Road, Sampletown 9000",
+      suburb: "Sampletown",
+    });
+    expect(fetchMock).toHaveBeenCalled();
+    expect(fetchMock.mock.calls.every((call) =>
+      String(call[0]).includes("public-search-caches/addresses"),
+    )).toBe(true);
+  });
+
   it("prefers the exact parent street number over a suffixed variant", async () => {
     process.env.GOOGLE_MAPS_API_KEY = "test-key";
     vi.stubGlobal(

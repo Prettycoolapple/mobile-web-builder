@@ -815,7 +815,7 @@ const styles = StyleSheet.create({
     paddingTop: 10,
   },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 17,
     letterSpacing: -0.4,
   },
   newBtn: {

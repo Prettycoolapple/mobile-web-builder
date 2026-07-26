@@ -550,7 +550,11 @@ export function mergePropertyData(
   const realestateListing = realestateListingScopedToSubject(realestateListingRaw, extra?.analysed_address)
     ? realestateListingRaw
     : null;
+  const realestateStatus = realestateListing?.listingStatus?.trim().toLowerCase() ?? "";
+  const hasActiveRealestateListing = !!realestateListing &&
+    !["sold", "withdrawn", "expired", "property_profile"].includes(realestateStatus);
   const selectedRealestateListing =
+    hasActiveRealestateListing &&
     !!extra?.preferred_realestate_listing_url &&
     !!realestateListing?.listingUrl &&
     realestateListing.listingUrl === extra.preferred_realestate_listing_url;
@@ -676,6 +680,7 @@ export function mergePropertyData(
   // CV: pick the valuation with the most recent year, not just the first non-null.
   const { cv_nzd, cv_year } = bestCV(sources, [
     { src: propertyHistorySource, cv_nzd: ph?.cv_nzd, cv_year: ph?.cv_year },
+    { src: "realestate.co.nz property profile", cv_nzd: realestateListing?.cvNzd, cv_year: realestateListing?.cvYear },
     { src: "propertyvalue",      cv_nzd: propertyValue?.cv_nzd, cv_year: propertyValue?.cv_year },
     { src: "oneroof",            cv_nzd: oneroof?.cv_nzd,  cv_year: oneroof?.cv_year },
     { src: "hougarden",          cv_nzd: hougarden?.cv_nzd, cv_year: undefined },
@@ -685,6 +690,7 @@ export function mergePropertyData(
 
   // Build year: prefer exact source years over rounded decade values.
   const buildYearResult = resolveBuildYear(sources, [
+    { src: "realestate.co.nz property profile", build_year: realestateListing?.buildYear },
     { src: "propertyvalue",      build_year: propertyValueBuildYear },
     { src: "oneroof",            build_year: oneroof?.listing_active ? oneroof.build_year : null },
     { src: "hougarden",          build_year: hougarden?.build_year },
@@ -745,6 +751,22 @@ export function mergePropertyData(
   const discrepancies: string[] = [];
   discrepancies.push(...landResolutionNotes);
   if (buildYearResult.note) discrepancies.push(buildYearResult.note);
+  if (build_year != null) {
+    for (const [rangeSource, range] of [
+      ["propertyvalue", propertyValueBuildYearRange],
+      ["qv", qvBuildYearRange],
+      ["homes", homesBuildYearRange],
+    ] as const) {
+      const years = String(range ?? "").match(/\b(?:19|20)\d{2}\b/g)?.map(Number) ?? [];
+      if (years.length === 0) continue;
+      const low = Math.min(...years);
+      const high = years.length > 1 ? Math.max(...years) : low + 9;
+      if (build_year >= low && build_year <= high) continue;
+      discrepancies.push(
+        `Build year: ${sources["build_year"] ?? "the selected exact source"} reports ${build_year}, while ${rangeSource} reports ${range}. The exact-year record is displayed, but the council property file/LIM should confirm the correct construction decade.`,
+      );
+    }
+  }
 
   // Rating feeds occasionally expose a stray bed/bath count on an otherwise
   // clearly vacant section. Prefer the address-matched valuation classification
@@ -765,7 +787,7 @@ export function mergePropertyData(
     && qv.bedrooms == null
     && qv.bathrooms == null
   );
-  const hasActiveDwellingListing = !!oneroof?.listing_active || !!realestateListing;
+  const hasActiveDwellingListing = !!oneroof?.listing_active || hasActiveRealestateListing;
   if (
     propertyValueConfirmsVacant &&
     !propertyValueHasStrongDwellingEvidence(propertyValue) &&
@@ -906,7 +928,7 @@ export function mergePropertyData(
   // realestate.co.nz JSON API still gives us structured active listing data.
   // Treat an address-matched active listing as fresher than static valuation
   // records for bed/bath/floor counts.
-  if (realestateListing) {
+  if (hasActiveRealestateListing && realestateListing) {
     if (realestateListing.floorArea != null && floor_area_sqm != null) {
       const delta = Math.abs(realestateListing.floorArea - floor_area_sqm) / floor_area_sqm;
       const override = shouldUseLiveAreaOverride(
@@ -1158,7 +1180,7 @@ export function mergePropertyData(
   // its asking price is the freshest figure; prefer it unconditionally.
   const listing_price = oneroof?.listing_active && oneroof.listing_price != null
     ? (sources["listing_price"] = "oneroof (live listing)", oneroof.listing_price)
-    : realestateListing?.price != null
+    : hasActiveRealestateListing && realestateListing?.price != null
       ? (sources["listing_price"] = "realestate.co.nz (active listing)", realestateListing.price)
       : null;
 

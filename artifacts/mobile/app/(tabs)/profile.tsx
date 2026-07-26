@@ -367,7 +367,7 @@ export default function ProfileScreen() {
             )}
             <View style={styles.headerTextGroup}>
               <View style={styles.headerNameRow}>
-                <Text style={[styles.headerTitle, { color: colors.headerText, fontFamily: "DM_Sans_600SemiBold" }]}>
+                <Text style={[styles.headerTitle, { color: colors.headerText, fontFamily: "SpaceGrotesk_700Bold" }]}>
                   {user?.fullName ?? t("profile.account")}
                 </Text>
                 {user?.isVerified && user.role === "service_provider" && (
@@ -958,7 +958,7 @@ const styles = StyleSheet.create({
   headerNameRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
   headerVerifiedBadge: { flexDirection: "row", alignItems: "center", gap: 3 },
   headerVerifiedText: { fontSize: 11, color: "rgba(250,249,246,0.5)", fontFamily: "DM_Sans_400Regular" },
-  headerTitle: { fontSize: 18, letterSpacing: -0.3 },
+  headerTitle: { fontSize: 17, letterSpacing: -0.4 },
   headerEmail: { fontSize: 13, marginTop: 1 },
   content: { padding: 16, gap: 8 },
   sectionHeader: {

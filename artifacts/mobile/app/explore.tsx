@@ -254,7 +254,7 @@ const styles = StyleSheet.create({
   },
   backBtn: { width: 40, height: 32, justifyContent: "center" },
   headerCenter: { flex: 1, alignItems: "center" },
-  headerTitle: { fontSize: 18, letterSpacing: -0.3 },
+  headerTitle: { fontSize: 17, letterSpacing: -0.4 },
   centerFill: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32 },
   emptyText: { fontSize: 14, textAlign: "center", lineHeight: 20 },
   listContent: { padding: 16 },

@@ -39,6 +39,10 @@ export interface ListingResult {
   zone: string | null;
   bedrooms: number | null;
   bathrooms: number | null;
+  /** Exact property-profile facts, used when an active or historical listing exposes them. */
+  buildYear?: number | null;
+  cvNzd?: number | null;
+  cvYear?: number | null;
   lat?: number | null;
   lng?: number | null;
   /**

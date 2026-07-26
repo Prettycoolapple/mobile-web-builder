@@ -22,6 +22,7 @@ import { extractBedsBaths } from "./bed-bath-extractor";
 
 const PLATFORM_BASE = "https://platform.realestate.co.nz/search/v1";
 const MEDIA_BASE = "https://mediaserver.realestate.co.nz";
+const PROPERTY_GRAPHQL_URL = "https://services.realestate.co.nz/graphql";
 const FETCH_TIMEOUT_MS = 12_000;
 const ADDRESS_MATCH_TIMEOUT_MS = 15_000;
 
@@ -790,6 +791,8 @@ interface RawListing {
     "bathrooms-total-count"?: number;
     "land-area"?: number;
     "land-area-unit"?: string;
+    "floor-area"?: number;
+    "floor-area-unit"?: string;
     "website-full-url"?: string;
     "listing-status"?: string;
     "is-featured"?: boolean;
@@ -956,6 +959,7 @@ function mapListing(raw: RawListing): ListingResult | null {
   const priceText = a["price-display"] ?? "";
   const price = parsePriceDisplay(priceText);
   const landArea = normaliseListingLandAreaSqm(a["land-area"], a["land-area-unit"] ?? null);
+  const floorArea = normaliseListingLandAreaSqm(a["floor-area"], a["floor-area-unit"] ?? null);
   const isCombinedListing = looksLikeCombinedListingAddress(address);
   const sourceDescription = cleanListingDescription(
     stringAttr(rawAttrs, ["listing-description", "marketing-description", "description-html", "description"]),
@@ -972,6 +976,7 @@ function mapListing(raw: RawListing): ListingResult | null {
     isCombinedListing,
     combinedListingReason: isCombinedListing ? "multi_address_listing" : null,
     listingStatus: a["listing-status"] ?? null,
+    floorArea,
     listingTitle: address.split(",")[0]?.trim() || address,
     description: sourceDescription,
     features: [],
@@ -995,6 +1000,185 @@ async function fetchRawListingById(id: string): Promise<RawListing | null> {
   return json.data ?? null;
 }
 
+interface RealestatePropertyProfile {
+  shortId: string;
+  websiteSlug: string | null;
+  address: {
+    fullAddress: string;
+    streetAddress: string | null;
+    suburb: string | null;
+    latitude: number | null;
+    longitude: number | null;
+  };
+  bedroomsTotalCount: number | null;
+  bathroomsTotalCount: number | null;
+  floorArea: number | null;
+  landArea: number | null;
+  buildingAge: number | null;
+  category: string | null;
+  photoPrimary: { baseUrl: string | null } | null;
+  currentListings: Array<{ listingId: string | number | null }>;
+  councilEvaluations: Array<{ capitalValue: number | null }> | null;
+}
+
+async function fetchPropertyGraphql<T>(
+  query: string,
+  variables: Record<string, unknown>,
+): Promise<T | null> {
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(PROPERTY_GRAPHQL_URL, {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: {
+        "content-type": "application/json",
+        "user-agent": "ProjectAlpha/1.0",
+      },
+      body: JSON.stringify({ query, variables }),
+    });
+    if (!response.ok) {
+      logger.warn({ status: response.status }, "realestate-api: property GraphQL request failed");
+      return null;
+    }
+    const payload = await response.json() as { data?: T; errors?: Array<{ message?: string }> };
+    if (payload.errors?.length || !payload.data) {
+      logger.warn(
+        { errors: payload.errors?.map((error) => error.message).filter(Boolean) },
+        "realestate-api: property GraphQL response contained errors",
+      );
+      return null;
+    }
+    return payload.data;
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "realestate-api: property GraphQL request failed");
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchRealestatePropertyProfileByShortId(
+  shortId: string,
+): Promise<RealestatePropertyProfile | null> {
+  const data = await fetchPropertyGraphql<{ propertyById?: RealestatePropertyProfile | null }>(
+    `query PropertyProfile($shortId: String!) {
+      propertyById(shortId: $shortId) {
+        shortId
+        websiteSlug
+        address {
+          fullAddress
+          streetAddress
+          suburb
+          latitude
+          longitude
+        }
+        bedroomsTotalCount
+        bathroomsTotalCount
+        floorArea
+        landArea
+        buildingAge
+        category
+        photoPrimary { baseUrl }
+        currentListings { listingId }
+        councilEvaluations { capitalValue }
+      }
+    }`,
+    { shortId },
+  );
+  return data?.propertyById ?? null;
+}
+
+function positiveProfileNumber(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function finiteProfileCoordinate(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function profileListingId(profile: RealestatePropertyProfile): string | null {
+  const currentId = profile.currentListings
+    .map((listing) => String(listing.listingId ?? "").trim())
+    .find((id) => /^\d+$/.test(id));
+  if (currentId) return currentId;
+  return profile.photoPrimary?.baseUrl?.match(/\/listings\/(\d+)(?:\/|$)/i)?.[1] ?? null;
+}
+
+function propertyProfileUrl(profile: RealestatePropertyProfile): string {
+  if (profile.websiteSlug?.startsWith("/")) return `https://www.realestate.co.nz${profile.websiteSlug}`;
+  return `https://www.realestate.co.nz/property/${encodeURIComponent(profile.shortId)}`;
+}
+
+async function listingFromPropertyProfile(
+  profile: RealestatePropertyProfile,
+  requestedAddress?: string,
+): Promise<ListingResult | null> {
+  if (!profile.address?.fullAddress) return null;
+  if (requestedAddress && !addressesLikelyMatch(requestedAddress, profile.address.fullAddress)) return null;
+
+  const url = propertyProfileUrl(profile);
+  const listingId = profileListingId(profile);
+  let mapped: ListingResult | null = null;
+  if (listingId) {
+    const raw = await fetchRawListingById(listingId).catch(() => null);
+    const rawAddress = raw?.attributes.address?.["full-address"] ?? raw?.attributes.address?.["display-address"] ?? "";
+    if (raw && addressesLikelyMatch(profile.address.fullAddress, rawAddress)) {
+      const basic = mapListing(raw);
+      if (basic) {
+        const [annotated] = await annotateApproxFields([basic]).catch(() => [basic]);
+        mapped = annotated ?? basic;
+      }
+    }
+  }
+
+  const photoBase = profile.photoPrimary?.baseUrl;
+  const profilePhoto = photoBase ? `${MEDIA_BASE}${photoBase}.crop.1280x720.jpg` : null;
+  const profileMeta = mapped?.propertyType || profile.category?.trim()
+    ? null
+    : await fetchOgMeta(url).catch(() => null);
+  const cvNzd = positiveProfileNumber(profile.councilEvaluations?.[0]?.capitalValue);
+  const buildYear = positiveProfileNumber(profile.buildingAge);
+  const bedrooms = mapped?.bedrooms ?? positiveProfileNumber(profile.bedroomsTotalCount);
+  const bathrooms = mapped?.bathrooms ?? positiveProfileNumber(profile.bathroomsTotalCount);
+  const floorArea = mapped?.floorArea ?? positiveProfileNumber(profile.floorArea);
+  const landArea = mapped?.landArea ?? positiveProfileNumber(profile.landArea);
+
+  return {
+    address: profile.address.fullAddress,
+    price: mapped?.price ?? null,
+    priceText: mapped?.priceText ?? "",
+    landArea,
+    landAreaSource: landArea != null ? "realestate_api" : "unknown",
+    landAreaConfidence: "unverified",
+    listingStatus: mapped?.listingStatus ?? "property_profile",
+    floorArea,
+    propertyType: mapped?.propertyType ?? profileMeta?.propertyType ?? (profile.category?.trim() || null),
+    listingCategory: mapped?.listingCategory ?? profileMeta?.listingCategory ?? null,
+    listingTitle: mapped?.listingTitle ?? profile.address.streetAddress ?? profile.address.fullAddress,
+    description: mapped?.description ?? profileMeta?.description ?? null,
+    features: mapped?.features ?? [],
+    photoUrl: mapped?.photoUrl ?? profilePhoto,
+    photoUrls: mapped?.photoUrls?.length ? mapped.photoUrls : (profilePhoto ? [profilePhoto] : []),
+    listingUrl: url,
+    zone: null,
+    bedrooms,
+    bathrooms,
+    buildYear,
+    cvNzd,
+    cvYear: null,
+    lat: finiteProfileCoordinate(profile.address.latitude),
+    lng: finiteProfileCoordinate(profile.address.longitude),
+    bedroomsApprox: mapped?.bedroomsApprox,
+    bathroomsApprox: mapped?.bathroomsApprox,
+    landAreaApprox: mapped?.landAreaApprox,
+    floorAreaApprox: mapped?.floorAreaApprox,
+    priceApprox: mapped?.priceApprox,
+    tenureText: mapped?.tenureText ?? null,
+    legalDescription: mapped?.legalDescription ?? null,
+  };
+}
+
 function listingIdFromUrl(url: string | null | undefined): string | null {
   if (!url?.trim()) return null;
   const match = url.match(/realestate\.co\.nz\/(\d+)\//i) ?? url.match(/\/listings\/(\d+)(?:\b|\/|\?)/i);
@@ -1003,13 +1187,62 @@ function listingIdFromUrl(url: string | null | undefined): string | null {
 
 export async function fetchRealestateListingByUrl(url: string): Promise<ListingResult | null> {
   const id = listingIdFromUrl(url);
-  if (!id) return null;
+  if (!id) {
+    const shortId = url.match(/realestate\.co\.nz\/property\/[^?#]+\/([^/?#]+)(?:[/?#]|$)/i)?.[1] ?? null;
+    if (!shortId) return null;
+    const profile = await fetchRealestatePropertyProfileByShortId(shortId);
+    return profile ? listingFromPropertyProfile(profile) : null;
+  }
   const raw = await fetchRawListingById(id);
   if (!raw) return null;
   const mapped = mapListing(raw);
   if (!mapped) return null;
   const [annotated] = await annotateApproxFields([mapped]).catch(() => [mapped]);
   return annotated ?? mapped;
+}
+
+/**
+ * Resolves an exact sold/off-market property profile by address. The portal's
+ * address filter is only an initial candidate lookup: we still require one
+ * unambiguous, suffix-aware street-address match before using any coordinates
+ * or dwelling facts.
+ */
+export async function fetchRealestatePropertyProfileForAddress(
+  address: string,
+): Promise<ListingResult | null> {
+  const trimmed = address.trim();
+  if (!trimmed) return null;
+  const data = await fetchPropertyGraphql<{
+    propertySearch?: {
+      nodes?: Array<{
+        shortId?: string | null;
+        address?: { fullAddress?: string | null };
+      }>;
+    } | null;
+  }>(
+    `query PropertyAddressSearch($filters: PropertySearchFiltersInput!) {
+      propertySearch(filters: $filters) {
+        nodes {
+          shortId
+          address { fullAddress }
+        }
+      }
+    }`,
+    { filters: { addresses: [trimmed] } },
+  );
+  const exact = (data?.propertySearch?.nodes ?? []).filter((candidate) =>
+    candidate.shortId &&
+    candidate.address?.fullAddress &&
+    addressesLikelyMatch(trimmed, candidate.address.fullAddress)
+  );
+  if (exact.length !== 1) {
+    if (exact.length > 1) {
+      logger.warn({ address: trimmed, matches: exact.length }, "realestate-api: ambiguous exact property profile");
+    }
+    return null;
+  }
+  const profile = await fetchRealestatePropertyProfileByShortId(exact[0]!.shortId!);
+  return profile ? listingFromPropertyProfile(profile, trimmed) : null;
 }
 
 export async function fetchRealestateListingDetailsByUrl(url: string): Promise<{
@@ -2240,11 +2473,15 @@ async function annotateApproxFields(listings: ListingResult[]): Promise<ListingR
       // `floorSize` block embedded in the page. We surface whichever value we
       // see first; if both are present and differ by more than 5 m² AND >5%,
       // we flag it as approximate.
-      const floorArea = og.floorAreaSqm ?? og.floorAreaSqmJsonLd ?? null;
+      const floorArea = og.floorAreaSqm ?? og.floorAreaSqmJsonLd ?? l.floorArea ?? null;
       let floorAreaApprox = false;
-      if (og.floorAreaSqm != null && og.floorAreaSqmJsonLd != null) {
-        const diff = Math.abs(og.floorAreaSqm - og.floorAreaSqmJsonLd);
-        const pct = diff / Math.max(og.floorAreaSqm, og.floorAreaSqmJsonLd);
+      const floorReadings = [l.floorArea, og.floorAreaSqm, og.floorAreaSqmJsonLd]
+        .filter((value): value is number => value != null);
+      if (floorReadings.length >= 2) {
+        const low = Math.min(...floorReadings);
+        const high = Math.max(...floorReadings);
+        const diff = high - low;
+        const pct = diff / high;
         floorAreaApprox = diff > 5 && pct > 0.05;
       }
 

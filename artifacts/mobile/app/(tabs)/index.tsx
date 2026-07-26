@@ -343,9 +343,42 @@ function isCombinedPackageAnalyseRequest(text: string): boolean {
   return hasPackageSignal && (hasMultiAddressSignal || normalised.includes("package") || /组合|整包|打包/.test(text));
 }
 
+// Mirrors the server's agent-contact signals (lib/agent-contact-intent.ts).
+// Used only to decide whether the agent-contact pre-flight is worth running —
+// the server still owns the final classification.
+function hasAgentContactSignal(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    /\b(agent|agency|realtor|salesperson|vendor|seller|listing agent|sales agent|open home|viewing|inspection|walkthrough|call|phone|ring|contact|get in touch|speak to|talk to|who is selling|who listed)\b/i.test(lower) ||
+    /(中介|经纪|經紀|销售|銷售|联系|聯繫|电话|電話|看房|开放日|開放日|谁在卖|誰在賣|谁卖|誰賣|带看|帶看)/u.test(text)
+  );
+}
+
+// A question about the open report ("what are the key risks", "explain the cost
+// estimate", "5 个地块的审批流程是什么") must be answered by the assistant, never
+// swapped for the listing-agent card. Mirrors isReportFollowUpQuestion on the
+// server so the client can skip the pre-flight round-trip entirely.
+function isReportFollowUpQuestion(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    /\b(risk|risks|cost|costs|costing|budget|estimate|estimates|breakdown|roi|return|returns|profit|margin|yield|gdv|feasib\w*|zoning|zone|planning|overlay|overlays|consent|consents|approval|approvals|council|process|timeline|timeframe|how long|subdivid\w*|subdivision|lots?|infrastructure|services|water|wastewater|stormwater|sewer|retaining|slope|terrain|contamination|asbestos|heritage|flood|comparable|comparables|valuation|cv|contribution|contributions|levy|levies|finance|funding|interest rate|holding cost|scores?|assumptions?)\b/i.test(lower) ||
+    /\b(explain|why|what does|what do you mean|clarify|elaborate|walk me through|break (?:it|this) down)\b/i.test(lower) ||
+    /(风险|風險|成本|费用|費用|预算|預算|估算|明细|明細|回报|回報|利润|利潤|收益|可行性|分区|分區|规划|規劃|资源同意|資源同意|建筑许可|建築許可|审批|審批|流程|多久|时间线|時間線|工期|分割|细分|細分|地块|地塊|基础设施|基礎設施|供水|污水|雨水|挡土墙|擋土牆|坡度|地形|石棉|洪水|可比|成交|估值|评分|評分|解释|解釋|为什么|為什麼|说明|說明)/u.test(text)
+  );
+}
+
 function isLongRunningSubdivisionDiscover(text: string, mode: "analyse" | "discover" | "followup"): boolean {
   if (mode !== "discover") return false;
   return /subdivi|sub[-\s]?divide|subdivision|分割|分地|细分|細分|可分割|可细分|可細分/i.test(text);
+}
+
+// Agent cards carry no text of their own, so the intent classifier used to see
+// a run of unanswered "contact the agent" user turns and kept re-serving the
+// card. Representing a delivered card as an assistant turn tells it the topic
+// is already resolved. Matches the marker the /chat history uses.
+function agentLookupHistoryContent(message: ChatMessage): string {
+  if (message.type !== "agent_contact") return message.content;
+  return `[Listing agent contact card shown for ${message.propertyAddress ?? "the property"}: ${message.agentName ?? "agent details"}]`;
 }
 
 function serializeSearchMessageForChat(message: ChatMessage): string {
@@ -1259,6 +1292,9 @@ export default function SearchScreen() {
     );
     if (!lastAssistantText) return;
     if (checkedFollowupIds.current.has(lastAssistantText.id)) return;
+    // Error bubbles carry retryText for their "Try again" button. Trailing an
+    // agent card behind a failure reads as the app dodging the question.
+    if (lastAssistantText.retryText) return;
 
     const alreadyHasAgentBubble = msgs.some((m) => m.type === "agent_contact");
     if (alreadyHasAgentBubble) return;
@@ -1269,6 +1305,15 @@ export default function SearchScreen() {
     // belongs in the agent-contact bubble.
     const lastUserMessage = [...msgs].reverse().find((m) => m.role === "user" && m.type === "text");
     if (lastUserMessage && isCombinedPackageAnalyseRequest(lastUserMessage.content)) return;
+    // Never trail an agent card behind a report question — the user asked about
+    // risks/costs/consents, not about who is selling.
+    if (
+      lastUserMessage &&
+      !hasAgentContactSignal(lastUserMessage.content) &&
+      isReportFollowUpQuestion(lastUserMessage.content)
+    ) {
+      return;
+    }
     if (currentSession?.currentReportGroup) return;
     const hasReportGroupInSession = msgs.some((m) => m.type === "report_group");
     if (hasReportGroupInSession) return;
@@ -1288,9 +1333,9 @@ export default function SearchScreen() {
           ((reportForAgentLookup.propertyOverview as any)?.selectedListingContext as SelectedListingContext | undefined) ??
           null;
         const conversationHistory = msgs
-          .filter((m) => m.type === "text")
+          .filter((m) => m.type === "text" || m.type === "agent_contact")
           .slice(-6)
-          .map((m) => ({ role: m.role, content: m.content }));
+          .map((m) => ({ role: m.role, content: agentLookupHistoryContent(m) }));
 
         const agentCtrl = new AbortController();
         const agentTimer = setTimeout(() => agentCtrl.abort(), 30_000);
@@ -2411,6 +2456,18 @@ export default function SearchScreen() {
       user?.role === "general" &&
       !!agentAddress &&
       !isPackageAnalysisRequest;
+    // The agent-contact pre-flight is only worth its round-trip when the
+    // message could plausibly be about the selling side. Report questions
+    // ("what are the key risks", "5 个地块的审批流程是什么") skip it: they were
+    // being answered with a repeat of the agent card instead of reaching the
+    // assistant at all. Once a card is on screen we also stop re-offering it
+    // unless the user asks for the agent again. The LIM/title pre-flight below
+    // keeps its own (unchanged) gate — a document request is not an agent ask.
+    const explicitAgentAsk = hasAgentContactSignal(text);
+    const alreadyShowedAgentCard = (currentSession?.messages ?? []).some((m) => m.type === "agent_contact");
+    const shouldLookupAgentContact =
+      shouldLookupListingAgent &&
+      (explicitAgentAsk || (!isReportFollowUpQuestion(text) && !alreadyShowedAgentCard));
 
     // LIM/title intent takes precedence over the generic "contact the agent"
     // classifier. Explicit requests are always evaluated; an active proactive
@@ -2516,13 +2573,13 @@ export default function SearchScreen() {
       }
     }
 
-    if (shouldLookupListingAgent) {
+    if (shouldLookupAgentContact) {
       try {
         const conversationHistory = [
           ...(currentSession?.messages ?? [])
-            .filter((m) => m.type === "text")
-            .slice(-5)
-            .map((m) => ({ role: m.role, content: m.content })),
+            .filter((m) => m.type === "text" || m.type === "agent_contact")
+            .slice(-6)
+            .map((m) => ({ role: m.role, content: agentLookupHistoryContent(m) })),
           { role: "user" as const, content: text },
         ];
         const agentCtrl = new AbortController();
@@ -2890,7 +2947,17 @@ export default function SearchScreen() {
           clearTimeout(timeoutId);
 
           if (!resp.ok) {
-            const err = (await resp.json()) as { error?: string; code?: string; message?: string };
+            // Gateway timeouts and proxy errors return HTML, not JSON. Parsing
+            // that with resp.json() threw a SyntaxError, which the retry loop
+            // below treats as non-retryable — the user saw "couldn't reach the
+            // service" after a single slow request. Read defensively instead.
+            const errBody = await resp.text().catch(() => "");
+            let err: { error?: string; code?: string; message?: string } = {};
+            try {
+              err = errBody ? JSON.parse(errBody) : {};
+            } catch {
+              err = { error: errBody.slice(0, 200) || `HTTP ${resp.status}` };
+            }
             if (resp.status === 401 && err.code === "AUTH_REQUIRED" && !user) {
               updateLastMessage({ type: "text", content: err.message || t("guest_analysis.body") }, sessionId);
               setIsLoading(false);
@@ -2915,7 +2982,15 @@ export default function SearchScreen() {
               setIsLoading(false);
               return;
             }
-            throw Object.assign(new Error(err.error || "Server error"), { isServerError: true, statusCode: resp.status });
+            // AI_UNAVAILABLE means the backend already exhausted its own model
+            // retries — hammering it four more times just makes the user wait
+            // minutes for the same answer, so surface it straight away.
+            throw Object.assign(new Error(err.error || "Server error"), {
+              isServerError: err.code !== "AI_UNAVAILABLE",
+              statusCode: resp.status,
+              serverCode: err.code,
+              serverMessage: err.message ?? err.error,
+            });
           }
 
           // Always read as text first, then parse — avoids issues where resp.json()
@@ -3158,6 +3233,10 @@ export default function SearchScreen() {
 
       const isTimeout = lastErr?.name === "AbortError";
       const statusCode = lastErr?.statusCode;
+      // The backend distinguishes "the AI provider is down" from a transport
+      // failure; telling the user to check their connection in that case sends
+      // them chasing the wrong problem.
+      const isAiOutage = lastErr?.serverCode === "AI_UNAVAILABLE" || lastErr?.serverCode === "CHAT_FAILED";
       const finalContent =
         isTimeout
           ? t("search.slow_data")
@@ -3165,9 +3244,11 @@ export default function SearchScreen() {
             ? t("search.usage_used_upgrade")
             : statusCode === 401
               ? t("search.session_expired")
-              : isLongRunningAnalyseChat
-                ? t("search.slow_data")
-                : t("search.cant_reach");
+              : isAiOutage
+                ? (lastErr?.serverMessage as string | undefined) || t("search.ai_unavailable")
+                : isLongRunningAnalyseChat
+                  ? t("search.slow_data")
+                  : t("search.cant_reach");
       if (statusCode === 402) setShowPaywall(true);
       updateLastMessage({ type: "text", content: finalContent, retryText: text }, sessionId);
     } finally {

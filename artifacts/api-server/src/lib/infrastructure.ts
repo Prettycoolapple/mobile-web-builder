@@ -87,7 +87,14 @@ const LOCATION_RANK: Record<InfrastructureItem["location"], number> = {
 };
 
 const DEFAULT_SEARCH_DISTANCE_M = 200;
-const RURAL_INFRASTRUCTURE_ZONES = new Set(["CLZ", "LLRZ", "RCSZ", "RUR"]);
+const RURAL_INFRASTRUCTURE_ZONES = new Set([
+  "CLZ",
+  "LLRZ",
+  "RCSZ",
+  "RUR",
+  "RURAL LIFESTYLE ENVIRONMENT",
+  "GENERAL RURAL ENVIRONMENT",
+]);
 
 export type InfrastructureFetchOptions = {
   zoneCode?: string | null;

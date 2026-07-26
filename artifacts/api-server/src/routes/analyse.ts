@@ -106,6 +106,7 @@ import { resolveActiveListingContext } from "../lib/active-listing-context";
 import { resolveAddressForAnalysis } from "../lib/address-clarification";
 import { looksLikeUnitOrApartmentAddress } from "../lib/address-patterns";
 import { buildPostAnalysisAnswers } from "../lib/post-analysis-answer";
+import { buildReportFollowUpFallback } from "../lib/report-followup-fallback";
 import { detectProviderRecommendationIntent } from "../lib/provider-recommendation-intent";
 import { tryGeocodeAddress } from "../lib/geocode";
 import {
@@ -8937,7 +8938,33 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
 
       }
 
-      const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport, effectiveMode, chatLocale);
+      let content: string;
+      let responseMode: string;
+      try {
+        const generated = await generateUnifiedResponse(messages, currentReport, effectiveMode, chatLocale);
+        content = generated.content;
+        responseMode = generated.mode;
+      } catch (genErr) {
+        // Every model attempt failed (provider outage, timeout, context limit).
+        // A follow-up about an open report can still be answered from the stored
+        // report data — far better than the client's "couldn't reach the
+        // service" retry loop. Anything else gets an honest, retryable message.
+        req.log.error({ err: genErr, effectiveMode }, "Chat reply generation failed on every model");
+        const offlineAnswer =
+          effectiveMode === "followup"
+            ? buildReportFollowUpFallback(userText, (currentReport ?? null) as Record<string, unknown> | null, chatLocale)
+            : null;
+        if (offlineAnswer) {
+          res.json({ content: sanitizeAssistantProse(offlineAnswer, chatLocale), mode: "text", ...providerSignal });
+          return;
+        }
+        const unavailable =
+          chatLocale === "zh"
+            ? "AI 助手暂时不可用，请稍后重试。"
+            : "The AI assistant is temporarily unavailable. Please try again in a moment.";
+        res.status(503).json({ error: unavailable, message: unavailable, code: "AI_UNAVAILABLE" });
+        return;
+      }
 
       // Safety net A: if the AI said "I'm searching..." but the discover pipeline didn't run,
       // extract the suburb from the AI's text and actually run the search now.

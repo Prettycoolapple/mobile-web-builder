@@ -331,7 +331,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   headerBtn: { width: 40, height: 36, alignItems: "center", justifyContent: "center" },
-  headerTitle: { flex: 1, textAlign: "center", fontSize: 18, letterSpacing: -0.3 },
+  headerTitle: { flex: 1, textAlign: "center", fontSize: 17, letterSpacing: -0.4 },
   askBtn: { minHeight: 34, borderRadius: 18, paddingHorizontal: 11, flexDirection: "row", alignItems: "center", gap: 5 },
   askBtnText: { color: "#fff", fontSize: 13 },
   listArea: { flex: 1, position: "relative", paddingHorizontal: 16, paddingTop: 12 },

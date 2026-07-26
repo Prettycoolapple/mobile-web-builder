@@ -67,6 +67,7 @@ import {
   addressLineAppearsInText,
   addressesLikelyMatch,
   fetchRealestateListingByUrl,
+  fetchRealestatePropertyProfileForAddress,
   fetchSupplementListingComparables,
 } from "./scrapers/realestate-api";
 import { selectedListingPhotoUrls, type SelectedListingContext } from "./selected-listing-context";
@@ -514,7 +515,9 @@ export function hasCacheableCore(r: PipelineResult): boolean {
   }
   const ph = r.raw_property.property_history;
   const hasCompleteDirectRegionalCore =
-    providerId === "manawatu"
+    providerId === "taupo"
+      ? ph?.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
+      : providerId === "manawatu"
       ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
       : providerId === "western-bay"
       ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
@@ -632,6 +635,7 @@ export async function runPropertyPipeline(
   const failedSources: string[] = [];
   const pipelineStart = Date.now();
   let preferredRealestateListing: ListingResult | null = null;
+  let realestatePropertyProfile: ListingResult | null = null;
 
   // Global property cache: when present, leaf external fetches below resolve from
   // `cr` instead of the network. The derived/financial layer is untouched and
@@ -659,6 +663,41 @@ export async function runPropertyPipeline(
     try {
       return await geocodeAddress(address);
     } catch (primaryError) {
+      if (
+        preferredRealestateListing?.lat != null &&
+        preferredRealestateListing.lng != null &&
+        activeListingFactsMatchSubject(preferredRealestateListing, address)
+      ) {
+        logger.info(
+          { address, listing: preferredRealestateListing.address },
+          "Pipeline: exact selected listing supplied the subject coordinates",
+        );
+        return {
+          lat: preferredRealestateListing.lat,
+          lng: preferredRealestateListing.lng,
+          formatted: preferredRealestateListing.address,
+          suburb: preferredRealestateListing.address.split(",")[1]?.replace(/\b\d{4}\b/g, "").trim() || null,
+        };
+      }
+
+      realestatePropertyProfile = await fetchRealestatePropertyProfileForAddress(address);
+      if (
+        realestatePropertyProfile?.lat != null &&
+        realestatePropertyProfile.lng != null &&
+        activeListingFactsMatchSubject(realestatePropertyProfile, address)
+      ) {
+        logger.info(
+          { address, profile: realestatePropertyProfile.address },
+          "Pipeline: exact sold/off-market property profile supplied the subject coordinates",
+        );
+        return {
+          lat: realestatePropertyProfile.lat,
+          lng: realestatePropertyProfile.lng,
+          formatted: realestatePropertyProfile.address,
+          suburb: realestatePropertyProfile.address.split(",")[1]?.replace(/\b\d{4}\b/g, "").trim() || null,
+        };
+      }
+
       const fallbackAddress = options.geocodeFallbackAddress?.trim();
       if (!fallbackAddress || fallbackAddress.toLowerCase() === address.trim().toLowerCase()) throw primaryError;
       const fallback = await geocodeAddress(fallbackAddress);
@@ -847,7 +886,7 @@ export async function runPropertyPipeline(
   const needsZoneBasedRuralInfrastructure =
     !cr &&
     zoneCodeForInfrastructure != null &&
-    ["CLZ", "LLRZ", "RCSZ", "RUR"].includes(zoneCodeForInfrastructure) &&
+    ["CLZ", "LLRZ", "RCSZ", "RUR", "RURAL LIFESTYLE ENVIRONMENT", "GENERAL RURAL ENVIRONMENT"].includes(zoneCodeForInfrastructure) &&
     !infrastructureData.some((item) => item.rural_infrastructure_adjusted);
   if (needsZoneBasedRuralInfrastructure) {
     const zoneAwareInfrastructure = await timed(
@@ -1092,6 +1131,30 @@ export async function runPropertyPipeline(
     logger.info({ coverage: finalCoverage, source_map: finalSourceMap }, "Critical source data coverage complete");
   }
 
+  const hasBedrooms = !!(
+    propertyValueData?.bedrooms ||
+    qvData?.bedrooms ||
+    homesData?.bedrooms ||
+    oneRoofData?.bedrooms
+  );
+  const hasBathrooms = !!(
+    propertyValueData?.bathrooms ||
+    qvData?.bathrooms ||
+    homesData?.bathrooms ||
+    oneRoofData?.bathrooms
+  );
+  if (
+    !realestatePropertyProfile &&
+    (!finalCoverage.hasCV || !finalCoverage.hasBuildYear || !finalCoverage.hasFloorArea || !hasBedrooms || !hasBathrooms)
+  ) {
+    const profileResult = await timed(
+      "realestate_property_profile",
+      () => fetchRealestatePropertyProfileForAddress(address),
+      timing,
+    );
+    if (!profileResult.failed) realestatePropertyProfile = profileResult.value;
+  }
+
   const linzAreaSqm = linzParcelData?.area_sqm ?? null;
 
   // Priority: elevation API (actual measured degrees) always wins over scraped text labels.
@@ -1139,11 +1202,14 @@ export async function runPropertyPipeline(
     timing,
   );
   if (!activeListingResult.failed && activeListingResult.value) {
-    realestateListing = activeListingResult.value.realestateListing ?? preferredRealestateListing;
+    realestateListing =
+      activeListingResult.value.realestateListing ??
+      preferredRealestateListing ??
+      realestatePropertyProfile;
     resolvedListingContext = activeListingResult.value.context ?? options.selectedListingContext ?? null;
   } else {
     failedSources.push("active_listing_context");
-    realestateListing = preferredRealestateListing;
+    realestateListing = preferredRealestateListing ?? realestatePropertyProfile;
   }
   const realestateListingForFacts = activeListingFactsMatchSubject(realestateListing, geocode!.formatted ?? address)
     ? realestateListing
@@ -1321,12 +1387,13 @@ export async function runPropertyPipeline(
   // authoritative LINZ-derived estate type.
   const realestateTenure = sanitizeTenureField(realestateListingForFacts?.tenureText);
   const oneRoofTenure = sanitizeTenureField(oneRoofData?.tenureText);
+  const homesTenure = sanitizeTenureField(homesData?.tenureText);
   const titleResolution = resolveTitleStatus({
     lrsTenure,
     lrsPreviewSource: linzLrsPreviewSource,
     lrsStatus: linzLrsStatus,
     listingTenures: [realestateTenure],
-    scrapedTenures: [oneRoofTenure],
+    scrapedTenures: [oneRoofTenure, homesTenure],
     titleEstate,
     parcelEstate,
   });
@@ -1707,6 +1774,8 @@ export async function runPropertyPipeline(
         ? "napier"
       : planningProvider?.providerId === "southland"
         ? "southland"
+      : planningProvider?.providerId === "taupo"
+        ? "taupo"
       : null;
   if (
     regionalComparableFallback &&
@@ -1795,6 +1864,7 @@ export async function runPropertyPipeline(
 
   const hasRealComparablePricing = comparablesResult.avg_sale_price > 0 || comparablesResult.avg_price_per_sqm > 0;
   const regionalCvExitFallbackAllowed = planningProvider?.providerId === "rotorua"
+    || planningProvider?.providerId === "taupo"
     || planningProvider?.providerId === "whakatane"
     || planningProvider?.providerId === "southland"
     || planningProvider?.providerId === "wairarapa"

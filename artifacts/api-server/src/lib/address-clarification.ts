@@ -391,7 +391,7 @@ export async function resolveAddressForAnalysis(
   try {
     const linzCandidates = await fetchLINZAddressCandidates(trimmed, { maxResults: 5 });
     for (const candidate of linzCandidates) {
-      push({ formatted: candidate.address, lat: null, lng: null });
+      push({ formatted: candidate.address, lat: candidate.lat, lng: candidate.lng });
     }
   } catch (err) {
     logger.warn({ err }, "LINZ address candidates failed during address clarification");

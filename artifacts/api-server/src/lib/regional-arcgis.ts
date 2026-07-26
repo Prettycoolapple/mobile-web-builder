@@ -53,6 +53,8 @@ interface RegionalArcGisConfig {
   overlayLayers: RegionalOverlayLayer[];
   /** Council-specific allowance for slow server-to-server ArcGIS responses. */
   queryTimeoutMs?: number;
+  /** Protect smaller council ArcGIS hosts from a burst across every overlay. */
+  maxConcurrentOverlayQueries?: number;
 }
 
 interface ArcGisLayerMetadata {
@@ -128,6 +130,12 @@ const KCDC_WIND_AND_CORROSION =
   "https://maps.kapiticoast.govt.nz/server/rest/services/Public/Wind_and_Corrosion/MapServer";
 const KCDC_ADAPTATION_AREAS =
   "https://maps.kapiticoast.govt.nz/server/rest/services/Public/Adaptation_Areas/MapServer";
+const TAUPO_ENVIRONMENTS =
+  "https://maps.taupodc.govt.nz/server/rest/services/districtplan/Environment/FeatureServer";
+const TAUPO_EPLAN =
+  "https://maps.taupodc.govt.nz/server/rest/services/districtplan/ePlan_Server/MapServer";
+const TAUPO_OVERLAYS =
+  "https://maps.taupodc.govt.nz/server/rest/services/districtplan/Overlay/FeatureServer";
 const ROTORUA_DISTRICT_PLAN =
   "https://gis.rdc.govt.nz/server/rest/services/Core/DistrictPlan/MapServer";
 const ROTORUA_PLANNING =
@@ -700,6 +708,64 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
       overlay(HCC_DISTRICT_PLAN, 115, "Notable Tree", "point", "moderate", 30),
     ],
   },
+  taupo: {
+    zoneLayers: [
+      {
+        serviceUrl: TAUPO_ENVIRONMENTS,
+        layerId: 31,
+        label: "Taupō District Plan Environment",
+        codeField: "Zone",
+        nameFields: ["Zone"],
+        detailFields: ["ChangeReason"],
+        decodeCodedValues: false,
+      },
+    ],
+    overlayLayers: [
+      overlay(TAUPO_EPLAN, 1, "Road Hierarchy", "polyline", "control", 25),
+      overlay(TAUPO_EPLAN, 2, "Designation", "polygon", "control"),
+      overlay(TAUPO_EPLAN, 3, "Historic Value", "polygon", "restricted"),
+      overlay(TAUPO_EPLAN, 4, "Heritage Site", "point", "restricted", 30),
+      overlay(TAUPO_EPLAN, 5, "Notable Tree", "point", "moderate", 30),
+      overlay(TAUPO_EPLAN, 6, "Noise Control", "polygon", "moderate"),
+      overlay(TAUPO_EPLAN, 7, "Height Restricted Area", "polygon", "control"),
+      overlay(TAUPO_EPLAN, 8, "Stormwater Disposal Area", "polygon", "control"),
+      overlay(TAUPO_EPLAN, 10, "Fault Line", "polyline", "restricted", 30),
+      overlay(TAUPO_EPLAN, 11, "Hot Ground Hazard Area", "polygon", "restricted"),
+      overlay(TAUPO_EPLAN, 12, "Known Contaminated Site", "point", "restricted", 30),
+      overlay(TAUPO_EPLAN, 13, "Land Instability Area", "polygon", "restricted"),
+      overlay(TAUPO_EPLAN, 14, "Erosion Hazard Area", "polygon", "restricted"),
+      overlay(TAUPO_EPLAN, 16, "Outstanding Landscape Area", "polygon", "restricted"),
+      overlay(TAUPO_EPLAN, 17, "Amenity Landscape Area", "polygon", "moderate"),
+      overlay(TAUPO_EPLAN, 18, "Significant Natural Area", "polygon", "restricted"),
+      overlay(TAUPO_EPLAN, 20, "Electricity Generation Core Site", "polygon", "restricted"),
+      overlay(TAUPO_EPLAN, 21, "Electricity Transmission Line", "polyline", "restricted", 30),
+      overlay(TAUPO_EPLAN, 22, "Electricity Transmission Line 20m Buffer", "polygon", "restricted"),
+      overlay(TAUPO_EPLAN, 23, "High Pressure Gas Pipeline", "polyline", "restricted", 30),
+      overlay(TAUPO_EPLAN, 24, "Taupō District Council Reserve", "polygon", "control"),
+      overlay(TAUPO_EPLAN, 25, "Electricity Transmission Line 32m Buffer", "polygon", "restricted"),
+      overlay(TAUPO_EPLAN, 26, "Neighbourhood Shopping Centre", "polygon", "control"),
+      overlay(TAUPO_EPLAN, 27, "Geothermal Rule", "polygon", "restricted"),
+      overlay(TAUPO_EPLAN, 28, "Residential Rule", "polygon", "control"),
+      overlay(TAUPO_OVERLAYS, 0, "Taupō Industrial Light and Landscaping Control", "polygon", "control"),
+      overlay(TAUPO_OVERLAYS, 35, "Sensitive Land", "polygon", "restricted"),
+      overlay(TAUPO_OVERLAYS, 36, "KTHD Control", "polygon", "control"),
+      overlay(TAUPO_OVERLAYS, 37, "Foreshore Protection Area", "polygon", "restricted"),
+      overlay(TAUPO_OVERLAYS, 38, "Height Restricted Area", "polygon", "control"),
+      overlay(TAUPO_OVERLAYS, 39, "Specific Requirement Area", "polygon", "control"),
+      overlay(TAUPO_OVERLAYS, 40, "Kinloch Landscape Area", "polygon", "moderate", undefined, ["Type", "Label", "Overlay"]),
+      overlay(TAUPO_OVERLAYS, 41, "Mapara Escarpment Area", "polygon", "restricted"),
+      overlay(TAUPO_OVERLAYS, 42, "Mapara Forest Cluster Neighbourhood A", "polygon", "control"),
+      overlay(TAUPO_OVERLAYS, 43, "Mapara Revegetation Area", "polygon", "control"),
+      overlay(TAUPO_OVERLAYS, 44, "Mapara Riparian Area", "polygon", "restricted"),
+      overlay(TAUPO_OVERLAYS, 45, "Mapara Urban Neighbourhood", "polygon", "control"),
+      overlay(TAUPO_OVERLAYS, 46, "Mapara Valley Structure Plan Area", "polygon", "control"),
+      overlay(TAUPO_OVERLAYS, 47, "Lake Ohakuri Development Zone", "polygon", "control"),
+      overlay(TAUPO_OVERLAYS, 48, "Pukawa C Development Zone", "polygon", "control"),
+      overlay(TAUPO_OVERLAYS, 49, "Unserviced Residential Area", "polygon", "restricted"),
+    ],
+    queryTimeoutMs: 12_000,
+    maxConcurrentOverlayQueries: 6,
+  },
   rotorua: {
     zoneLayers: [
       {
@@ -1195,8 +1261,7 @@ export async function fetchRegionalPlanningOverlays(
   const config = configFor(jurisdiction.providerId);
   if (!config) return [];
 
-  const settled = await Promise.allSettled(
-    config.overlayLayers.map(async (layer): Promise<Overlay | null> => {
+  const queryLayer = async (layer: RegionalOverlayLayer): Promise<Overlay | null> => {
       const distanceM = layer.distanceM ?? (layer.geometryType === "polygon" ? undefined : 25);
       const timeoutMs = config.queryTimeoutMs ?? 8000;
       // Resolve a polygon at the address point first.  On large rural parcels
@@ -1227,8 +1292,15 @@ export async function fetchRegionalPlanningOverlays(
           ? `${layer.name} applies - ${detail}. Confirm implications in the local district plan.`
           : `${layer.name} applies. Confirm implications in the local district plan.`,
       };
-    }),
-  );
+  };
+
+  const settled: PromiseSettledResult<Overlay | null>[] = [];
+  const concurrency = Math.max(1, config.maxConcurrentOverlayQueries ?? config.overlayLayers.length);
+  for (let offset = 0; offset < config.overlayLayers.length; offset += concurrency) {
+    settled.push(...await Promise.allSettled(
+      config.overlayLayers.slice(offset, offset + concurrency).map(queryLayer),
+    ));
+  }
 
   const overlays: Overlay[] = [];
   const seen = new Set<string>();

@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { fetchLINZAddressCandidates } from "./linz";
 
 export interface GeoResult {
   lat: number;
@@ -417,6 +418,27 @@ export async function tryGeocodeAddress(address: string): Promise<GeoResult | nu
     if (exactCouncilAddress) return exactCouncilAddress;
   } catch (err) {
     logger.warn({ err, address }, "Council exact-address geocoding failed");
+  }
+
+  try {
+    const officialCandidates = await fetchLINZAddressCandidates(address, { maxResults: 3 });
+    const exact = officialCandidates.find((candidate) =>
+      candidate.lat != null &&
+      candidate.lng != null &&
+      streetNumberMatchesExactly(address, streetNumberFromFormatted(candidate.address))
+    );
+    if (exact?.lat != null && exact.lng != null) {
+      const locality = exact.address.split(",")[1]?.replace(/\b\d{4}\b/g, "").trim() || null;
+      logger.debug({ address, candidate: exact.address }, "Geocoded via official LINZ address point");
+      return {
+        lat: exact.lat,
+        lng: exact.lng,
+        formatted: exact.address,
+        suburb: locality,
+      };
+    }
+  } catch (err) {
+    logger.warn({ err, address }, "LINZ exact-address geocoding failed");
   }
 
   if (googleKey) {

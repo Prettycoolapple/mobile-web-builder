@@ -511,7 +511,7 @@ const styles = StyleSheet.create({
   headerSide: { width: 84, flexDirection: "row", alignItems: "center" },
   headerActions: { justifyContent: "flex-end" },
   headerBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
-  headerTitle: { flex: 1, textAlign: "center", color: "#FAFAF9", fontFamily: "DM_Sans_700Bold", fontSize: 16 },
+  headerTitle: { flex: 1, textAlign: "center", color: "#FAFAF9", fontFamily: "SpaceGrotesk_700Bold", fontSize: 17, letterSpacing: -0.4 },
   heroImage: { height: 260 },
   heroPlaceholder: { height: 220, alignItems: "center", justifyContent: "center" },
   content: { padding: 18, gap: 14 },

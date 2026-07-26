@@ -228,6 +228,37 @@ describe("regional property-cache completeness", () => {
     } as never)).toBe(true);
   });
 
+  it("reacquires legacy Kinloch bundles and caches a complete Taupō core", () => {
+    expect(cachedRawNeedsRegionalZoneRefresh({
+      planning_provider: { providerId: "unsupported" },
+      geocode: {
+        lat: -38.6206095,
+        lng: 175.9763673,
+        formatted: "302 Whangamata Road, Kinloch, Taupō District, Waikato",
+      },
+      zone: { zone_code: "Unknown zone" },
+    } as never)).toBe(true);
+
+    expect(cachedRawNeedsRegionalPropertyHistoryRefresh({
+      planning_provider: { providerId: "taupo" },
+      property_history: { cv_nzd: null, land_area_sqm: null },
+    } as never)).toBe(true);
+
+    expect(hasCacheableCore(baseResult({
+      geocode: { lat: -38.6206095, lng: 175.9763673 } as never,
+      merged: { cv_nzd: 860_000, land_area_sqm: 47_130 } as never,
+      raw_property: {
+        planning_provider: { providerId: "taupo" },
+        zone: { zone_code: "Rural Lifestyle Environment" },
+        property_history: { cv_nzd: null, land_area_sqm: 47_130 },
+        hougarden: null,
+        oneroof: null,
+        qv: null,
+        homes: null,
+      } as never,
+    }))).toBe(true);
+  });
+
   it("caches complete Tauranga council records and refreshes legacy unsupported bundles", () => {
     expect(hasCacheableCore(baseResult({
       geocode: { lat: -37.6646905, lng: 176.2110862 } as never,

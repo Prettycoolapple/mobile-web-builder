@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { hasExplicitAgentContactSignal, isCombinedPackageAnalyseRequest } from "../../lib/agent-contact-intent";
+import {
+  hasExplicitAgentContactSignal,
+  isCombinedPackageAnalyseRequest,
+  isReportFollowUpQuestion,
+} from "../../lib/agent-contact-intent";
 
 describe("agent contact intent signals", () => {
   it("catches mixed Chinese and English requests before LLM intent detection", () => {
@@ -33,6 +37,34 @@ describe("agent contact intent signals", () => {
         "分析组合挂牌 12 Smith Road and 14 Smith Road — 中介后续再问",
       ),
     ).toBe(false);
+  });
+});
+
+describe("isReportFollowUpQuestion", () => {
+  it("treats post-report questions as hard-negative for agent contact", () => {
+    // The exact questions that were being answered with a repeat of the agent
+    // card instead of an answer.
+    expect(isReportFollowUpQuestion("Can you explain the cost estimate you factored in?")).toBe(true);
+    expect(isReportFollowUpQuestion("What are the key risks")).toBe(true);
+    expect(isReportFollowUpQuestion("5 个地块的审批流程是什么？")).toBe(true);
+    expect(isReportFollowUpQuestion("这个项目的回报率如何?")).toBe(true);
+    expect(isReportFollowUpQuestion("How long does resource consent take?")).toBe(true);
+    expect(isReportFollowUpQuestion("What's the zoning here?")).toBe(true);
+  });
+
+  it("does not classify agent requests or greetings as report follow-ups", () => {
+    expect(isReportFollowUpQuestion("Contact Sales agent")).toBe(false);
+    expect(isReportFollowUpQuestion("Who is selling this?")).toBe(false);
+    expect(isReportFollowUpQuestion("联系中介")).toBe(false);
+    expect(isReportFollowUpQuestion("thanks!")).toBe(false);
+    expect(isReportFollowUpQuestion("")).toBe(false);
+  });
+
+  it("keeps explicit agent asks winning over the report-topic guard", () => {
+    // Callers run hasExplicitAgentContactSignal first, so a message that
+    // mentions both still resolves to the agent.
+    const mixed = "Can you get the agent to explain the consent process?";
+    expect(hasExplicitAgentContactSignal(mixed)).toBe(true);
   });
 });
 

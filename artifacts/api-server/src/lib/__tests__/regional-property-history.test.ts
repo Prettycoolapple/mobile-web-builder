@@ -4,6 +4,27 @@ import { fetchRegionalPropertyHistory } from "../regional-property-history";
 describe("regional property history", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("returns Taupō District's exact rateable-land area for 302 Whangamata Road", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      features: [{ attributes: {
+        valuation_id: "0738426000",
+        property_location: "302 Whangamata Road, Taupo Ward",
+        property_legal_desc: "Lot 2 DPS 87710",
+        cert_of_title: "SA69C/153",
+        PARCEL_AREA: 47_130,
+      } }],
+    }), { status: 200 })));
+
+    await expect(fetchRegionalPropertyHistory(
+      "taupo", "302 Whangamata Road, Kinloch", -38.6206095, 175.9763673,
+    )).resolves.toMatchObject({
+      land_area_sqm: 47_130,
+      land_area_source: "taupo_council_rateable_land_gis",
+      land_area_scope: "rating_unit",
+      sources_confirmed: ["land_area_sqm (Taupō District Council rateable land GIS)"],
+    });
+  });
+
   it("returns Selwyn's exact council rating record for 100 Birchs Road", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       features: [{ attributes: {

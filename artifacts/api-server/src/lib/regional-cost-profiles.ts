@@ -16,6 +16,7 @@ export type CostProfileId =
   | "kapiti-default"
   | "wellington-default"
   | "dunedin-default"
+  | "taupo-default"
   | "rotorua-default"
   | "whakatane-default"
   | "western-bay-default"
@@ -217,6 +218,10 @@ const REGIONAL_COST_OVERRIDES: Partial<Record<PlanningProviderId, DeepPartial<Re
   // connection/development contributions and council-rate inputs here later.
   selwyn: {},
   qldc: {},
+  // Seeded from Auckland by request. Tune Taupō District construction,
+  // rural servicing, contributions and council-rate assumptions here later
+  // without changing either Auckland or another regional profile.
+  taupo: {},
   rotorua: {},
   whakatane: {},
   // Seeded from Auckland by request. Tune Western Bay construction,
@@ -258,6 +263,7 @@ const PROVIDER_PROFILE_META: Record<PlanningProviderId, { id: CostProfileId; lab
   kapiti: { id: "kapiti-default", label: "Kāpiti Coast default cost profile (Auckland assumptions)" },
   wellington: { id: "wellington-default", label: "Wellington region default cost profile" },
   dunedin: { id: "dunedin-default", label: "Dunedin default cost profile" },
+  taupo: { id: "taupo-default", label: "Taupō District default cost profile (Auckland assumptions)" },
   rotorua: { id: "rotorua-default", label: "Rotorua default cost profile" },
   whakatane: { id: "whakatane-default", label: "Whakatane default cost profile" },
   "western-bay": { id: "western-bay-default", label: "Western Bay of Plenty default cost profile (Auckland assumptions)" },

@@ -4,7 +4,7 @@ import { db, profiles } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { scrapeListingAgent } from "../lib/scrapers/agent-contact";
-import { hasExplicitAgentContactSignal, isCombinedPackageAnalyseRequest } from "../lib/agent-contact-intent";
+import { hasExplicitAgentContactSignal, isCombinedPackageAnalyseRequest, isReportFollowUpQuestion } from "../lib/agent-contact-intent";
 import { normaliseSelectedListingContext, type SelectedListingContext } from "../lib/selected-listing-context";
 
 const router: IRouter = Router();
@@ -22,17 +22,18 @@ async function detectAgentContactIntent(messages: Message[]): Promise<boolean> {
   // otherwise. The button depends on this guarantee.
   if (isCombinedPackageAnalyseRequest(lastUserMessage.content)) return false;
   if (hasExplicitAgentContactSignal(lastUserMessage.content)) return true;
-
-  const recentText = messages
-    .slice(-8)
-    .map((m) => m.content)
-    .join(" ")
-    .toLowerCase();
+  // Hard-negative: a question about the report itself ("what are the key
+  // risks", "explain the cost estimate", "5 个地块的审批流程是什么") is never an
+  // agent-contact request, no matter what was asked earlier in the thread.
+  if (isReportFollowUpQuestion(lastUserMessage.content)) return false;
 
   const conversationText = messages
     .slice(-8)
     .map((m) => `[${m.role.toUpperCase()}]: ${m.content.slice(0, 500)}`)
     .join("\n");
+  const alreadyShown = messages.some(
+    (m) => m.role === "assistant" && /^\[Listing agent contact card shown/i.test((m.content ?? "").trim()),
+  );
 
   // Primary path: semantic intent detection. Do not keyword-gate this call;
   // users ask for agent contact in many natural ways.
@@ -41,23 +42,28 @@ async function detectAgentContactIntent(messages: Message[]): Promise<boolean> {
 
 The user has completed or is discussing a feasibility report for a specific property.
 
-RECENT CONVERSATION:
+RECENT CONVERSATION (context only — do NOT classify these turns):
 ${conversationText}
 
-LATEST USER MESSAGE:
+AGENT CONTACT CARD ALREADY SHOWN IN THIS THREAD: ${alreadyShown ? "yes" : "no"}
+
+LATEST USER MESSAGE (classify ONLY this one):
 "${lastUserMessage.content}"
 
 TASK:
-Determine whether the latest user message means they want the sales/listing agent's contact card for this property.
+Determine whether the LATEST user message is a NEW request for the sales/listing agent's contact card for this property.
 
-Return true when the user expresses the same intent as any of these, even if worded differently:
+Return true when the latest message expresses the same intent as any of these, even if worded differently:
 - wants to call, phone, ring, text, message, email, or speak with the listing/sales agent
 - asks who is selling, who listed it, who handles viewings, or who can show them the property
 - asks for the agent, agency, salesperson, vendor contact path, or contact details
-- asks to arrange a viewing, inspection, walkthrough, open home, or next step with the selling side
+- asks to arrange a viewing, inspection, walkthrough, or open home with the selling side
 - uses Chinese or other multilingual phrasing for contacting the agent/listing side
 
-Return false when they are asking about development professionals, planners, architects, builders, feasibility, ROI, zoning, risks, or general property advice without wanting the listing/sales agent.
+Return false when:
+- the latest message asks about the report itself — risks, costs, ROI, zoning, consents, approval process, timelines, lots, infrastructure, comparables, scores, or any other analysis detail
+- the latest message asks about development professionals (planners, architects, engineers, builders) or general property advice
+- the agent was requested in an EARLIER turn and the latest message has moved on to something else. An already-shown agent card must NOT be repeated unless the latest message asks for it again.
 
 Reply with ONLY valid JSON (no markdown):
 {"wantsAgentContact": <true|false>, "reason": "one sentence"}`;
@@ -65,7 +71,7 @@ Reply with ONLY valid JSON (no markdown):
     const result = await ai.models.generateContent({
       model: "deepseek-chat",
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-      config: { maxOutputTokens: 120, temperature: 0 },
+      config: { maxOutputTokens: 120, temperature: 0, timeoutMs: 15_000 },
     });
 
     const raw = result.text?.trim() ?? "";
@@ -73,7 +79,11 @@ Reply with ONLY valid JSON (no markdown):
     const parsed = JSON.parse(cleaned);
     return Boolean(parsed.wantsAgentContact);
   } catch {
-    // Conservative fallback only when AI is unavailable.
+    // Conservative fallback only when AI is unavailable. It reads the LATEST
+    // user message alone — scanning the whole recent conversation made the
+    // classifier sticky: one earlier "Contact Sales agent" turn matched on
+    // every later question and re-served the agent card instead of an answer.
+    const latestText = lastUserMessage.content.toLowerCase();
     const fallbackSignals = [
       "call", "contact", "phone", "number", "agent", "reach", "speak",
       "get in touch", "seller", "vendor", "realtor", "salesperson",
@@ -84,7 +94,7 @@ Reply with ONLY valid JSON (no markdown):
       "\u7535\u8bdd", "\u96fb\u8a71", "\u8c01\u5728\u5356", "\u8ab0\u5728\u8ce3",
       "\u8c01\u5356", "\u8ab0\u8ce3", "\u770b\u623f", "\u9500\u552e", "\u92b7\u552e",
     ];
-    return fallbackSignals.some((kw) => recentText.includes(kw));
+    return fallbackSignals.some((kw) => latestText.includes(kw));
   }
 }
 

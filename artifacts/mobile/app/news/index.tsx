@@ -111,7 +111,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   header: { minHeight: 58, paddingHorizontal: 12, paddingBottom: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   headerButton: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
-  headerTitle: { color: "#FAFAF9", fontFamily: "SpaceGrotesk_700Bold", fontSize: 21 },
+  headerTitle: { color: "#FAFAF9", fontFamily: "SpaceGrotesk_700Bold", fontSize: 17, letterSpacing: -0.4 },
   center: { flex: 1, minHeight: 320, alignItems: "center", justifyContent: "center", padding: 28, gap: 10 },
   emptyTitle: { fontFamily: "DM_Sans_700Bold", fontSize: 18, textAlign: "center" },
   emptyBody: { fontFamily: "DM_Sans_400Regular", fontSize: 14, textAlign: "center" }, retry: { fontFamily: "DM_Sans_700Bold", fontSize: 15 },

@@ -462,7 +462,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   backBtn: { width: 38, height: 38, alignItems: "flex-start", justifyContent: "center" },
-  headerTitle: { fontSize: 17, fontFamily: "DM_Sans_600SemiBold" },
+  headerTitle: { fontSize: 17, fontFamily: "SpaceGrotesk_700Bold", letterSpacing: -0.4 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16 },
   errorText: { fontSize: 15, fontFamily: "DM_Sans_400Regular", textAlign: "center" },
   retryBtn: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10, borderWidth: 1 },

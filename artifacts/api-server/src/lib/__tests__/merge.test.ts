@@ -1259,4 +1259,49 @@ describe("mergePropertyData", () => {
       expect.stringContaining("classify the property as vacant land"),
     ]));
   });
+
+  it("uses exact sold/off-market profile facts without treating the profile as an active listing", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 410 } as any,
+      null,
+      null,
+      { zone_code: "Lower Density Suburban Residential", zone_description: "Residential" } as any,
+      [],
+      {
+        contour: "flat",
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        analysed_address: "1B Highview Terrace, Queenstown",
+        realestate_listing: {
+          address: "1B Highview Terrace, Queenstown Central, Queenstown",
+          listingUrl: "https://www.realestate.co.nz/property/1b-highview-terrace/lsz5clpw",
+          listingStatus: "sold",
+          price: null,
+          priceText: "",
+          landArea: null,
+          floorArea: 120,
+          propertyType: "Unit",
+          photoUrl: null,
+          zone: null,
+          bedrooms: 3,
+          bathrooms: 2,
+          buildYear: 1990,
+          cvNzd: 1_250_000,
+          cvYear: 2024,
+        },
+      },
+    );
+
+    expect(merged).toMatchObject({
+      bedrooms: 3,
+      bathrooms: 2,
+      floor_area_sqm: 120,
+      build_year: 1990,
+      cv_nzd: 1_250_000,
+      cv_year: 2024,
+      property_type: "Unit",
+    });
+    expect(merged.data_sources.build_year).toBe("realestate.co.nz property profile");
+    expect(merged.data_sources.cv_nzd).toBe("realestate.co.nz property profile");
+  });
 });

@@ -31,6 +31,8 @@ export interface HomesData {
   bathrooms: number | null;
   last_sale_price: number | null;
   last_sale_date: string | null;
+  /** Exact-address ownership type when exposed by the Homes property record. */
+  tenureText?: string | null;
   address_confirmed: string | null;
 }
 
@@ -49,6 +51,7 @@ type HomesGatewayPropertyCard = {
     num_bathrooms?: unknown;
     latest_bedrooms?: unknown;
     latest_bathrooms?: unknown;
+    ownership_type?: unknown;
   };
 };
 
@@ -239,6 +242,7 @@ function cardToHomesData(card: HomesGatewayPropertyCard, addressNeedle: string):
     bathrooms,
     last_sale_price: null,
     last_sale_date: null,
+    tenureText: textOrNull(details.ownership_type),
     address_confirmed: confirmedAddress ?? urlAddress ?? addressNeedle,
   };
 }
@@ -488,6 +492,7 @@ function toHomesData(data: Partial<HomesData>, addressNeedle: string): HomesData
     bathrooms: data.bathrooms ?? null,
     last_sale_price: data.last_sale_price ?? null,
     last_sale_date: null,
+    tenureText: data.tenureText ?? null,
     address_confirmed: addressNeedle,
   };
 }

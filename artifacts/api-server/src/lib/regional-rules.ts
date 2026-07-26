@@ -128,6 +128,8 @@ const KAPITI_RURAL_LIFESTYLE_SOURCE =
   "https://www.kapiticoast.govt.nz/media/o0rhtal1/rurallifestylezone_218_20-aug-2025.pdf";
 const SELWYN_LLRZ_SUBDIVISION_SOURCE =
   "https://www.selwyn.govt.nz/property-And-building/planning/strategies-and-plans/selwyn-district-plan/selwyn-district-plan-review/variation-to-proposed-selwyn-district-plan/variation-1-mdrs2/variationhearings/quick-links-to-notified-hearing-topics/variation-rezone-prebbleton/s42a-report/Appendix-3-Selwyn-Residential-Capacity-and-Demand-Model-IPI.pdf";
+const TAUPO_RURAL_LIFESTYLE_SOURCE =
+  "https://www.taupodc.govt.nz/council/consultation/zclosed-consultations/2024/taupo-district-plan-changes-38-43/plan-change-42-general-rural-and-rural-lifestyle-environments";
 
 const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["providerId"]>([
   "hamilton",
@@ -140,6 +142,7 @@ const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["provi
   "selwyn",
   "matamata-piako",
   "manawatu",
+  "taupo",
   "rotorua",
   "whakatane",
   "western-bay",
@@ -149,6 +152,24 @@ const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["provi
 ]);
 
 const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
+  {
+    providerId: "taupo",
+    regionalZoneCode: "TDC_RLE",
+    zonePattern: /\brural lifestyle (?:environment|zone)\b/i,
+    zoneLabel: "Taupō Rural Lifestyle Environment",
+    standardMinimumLotSqm: 20_000,
+    requiredShapeText: "Each proposed allotment must provide suitable access and building platforms and demonstrate adequate on-site or network servicing and stormwater management.",
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Operative Taupō District Plan Change 42 Rural Lifestyle subdivision provisions",
+    sourceUrl: TAUPO_RURAL_LIFESTYLE_SOURCE,
+    caveats: [
+      "The 2ha threshold supports a first-pass yield only. Where Rural Lifestyle land adjoins the General Rural Environment, lots from 2ha to under 4ha require discretionary consent; 4ha or larger lots follow the controlled pathway.",
+      "Land Use Capability Class 3 soils, geothermal controls, natural hazards, contaminated land, access and natural-value overlays can change activity status or reduce real yield.",
+      "Rural properties generally self-service. A mapped council pipe near or within a parcel does not establish a legal lateral, network capacity, approval or a right to connect.",
+      "Existing dwellings, easements, shape and suitable building platforms have not been survey-designed in this first-pass lot count.",
+    ],
+    roiEnabled: true,
+  },
   {
     providerId: "selwyn",
     regionalZoneCode: "SDC_LLRZ",

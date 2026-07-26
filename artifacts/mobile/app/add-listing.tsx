@@ -557,7 +557,7 @@ export default function AddListingScreen() {
           <TouchableOpacity onPress={() => router.back()} style={styles.headerBack} activeOpacity={0.7}>
             <Feather name="x" size={22} color="rgba(250,249,246,0.8)" />
           </TouchableOpacity>
-          <Text style={[styles.headerTitle, { fontFamily: "DM_Sans_700Bold", color: "#FAFAF9" }]}>{t("add_listing.edit")}</Text>
+          <Text style={[styles.headerTitle, { fontFamily: "SpaceGrotesk_700Bold", color: "#FAFAF9" }]}>{t("add_listing.edit")}</Text>
           <View style={styles.headerSpacer} />
         </View>
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
@@ -574,7 +574,7 @@ export default function AddListingScreen() {
           <TouchableOpacity onPress={() => router.back()} style={styles.headerBack} activeOpacity={0.7}>
             <Feather name="x" size={22} color="rgba(250,249,246,0.8)" />
           </TouchableOpacity>
-          <Text style={[styles.headerTitle, { fontFamily: "DM_Sans_700Bold", color: "#FAFAF9" }]}>Listing access</Text>
+          <Text style={[styles.headerTitle, { fontFamily: "SpaceGrotesk_700Bold", color: "#FAFAF9" }]}>Listing access</Text>
           <View style={styles.headerSpacer} />
         </View>
         <View style={styles.accessGateWrap}>
@@ -606,7 +606,7 @@ export default function AddListingScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.headerBack} activeOpacity={0.7}>
           <Feather name="x" size={22} color="rgba(250,249,246,0.8)" />
         </TouchableOpacity>
-        <Text style={[styles.headerTitle, { fontFamily: "DM_Sans_700Bold", color: "#FAFAF9" }]}>
+        <Text style={[styles.headerTitle, { fontFamily: "SpaceGrotesk_700Bold", color: "#FAFAF9" }]}>
           {isEditMode ? t("add_listing.edit") : t("add_listing.new")}
         </Text>
         <View style={styles.headerSpacer} />
@@ -1047,7 +1047,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   headerBack: { padding: 4, marginRight: 8 },
-  headerTitle: { fontSize: 17, flex: 1, textAlign: "center" },
+  headerTitle: { fontSize: 17, flex: 1, textAlign: "center", letterSpacing: -0.4 },
   headerSpacer: { width: 34 },
 
   accessGateWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 28, paddingBottom: 40 },

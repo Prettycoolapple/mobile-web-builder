@@ -72,6 +72,12 @@ const WELLINGTON_WATER_THREE_WATERS =
   "https://gis.wellingtonwater.co.nz/server1/rest/services/Councils/All_Councils_3_Waters_Asset_Data/MapServer";
 const KAPITI_THREE_WATERS =
   "https://maps.kapiticoast.govt.nz/server/rest/services/Public/Services/MapServer";
+const TAUPO_WATER =
+  "https://maps.taupodc.govt.nz/server/rest/services/assetfinda/Water_Pipe/FeatureServer";
+const TAUPO_WASTEWATER =
+  "https://maps.taupodc.govt.nz/server/rest/services/assetfinda/Wastewater_Pipe/FeatureServer";
+const TAUPO_STORMWATER =
+  "https://maps.taupodc.govt.nz/server/rest/services/assetfinda/Stormwater_Pipe/FeatureServer";
 const ROTORUA_THREE_WATERS =
   "https://gis.rdc.govt.nz/server/rest/services/Asset/3_Waters/MapServer";
 const WHAKATANE_WATER =
@@ -179,6 +185,17 @@ const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfras
     group("Stormwater", WAIPA_STORMWATER, "Waipā District Council / Waikato OneView", [
       [0, "Stormwater pipe"],
     ], 1000),
+  ],
+  taupo: [
+    group("Water Supply", TAUPO_WATER, "Taupō District Council", [
+      [0, "Potable water pipe"],
+    ], 1500),
+    group("Wastewater", TAUPO_WASTEWATER, "Taupō District Council", [
+      [0, "Wastewater pipe"],
+    ], 1500),
+    group("Stormwater", TAUPO_STORMWATER, "Taupō District Council", [
+      [0, "Stormwater pipe"],
+    ], 1500),
   ],
   rotorua: [
     group("Water Supply", ROTORUA_THREE_WATERS, "Rotorua Lakes Council", [
