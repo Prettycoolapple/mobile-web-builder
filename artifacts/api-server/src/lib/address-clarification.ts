@@ -81,7 +81,11 @@ function exactAddressKey(s: string): string {
 
 function streetLineText(s: string): string {
   const parts = s.split(",").map((part) => part.trim()).filter(Boolean);
-  if (parts.length >= 2 && /^\d+[a-z]?$/i.test(parts[0]!)) {
+  // Nominatim formats unit addresses as "5/174, East Coast Road, ...".
+  // Join that split street line before validating it; otherwise the isolated
+  // "5/174" token is rejected even when LINZ supplied and geocoded an exact
+  // child-address match.
+  if (parts.length >= 2 && /^(?:[a-z]?\d+[a-z]?\s*\/\s*)?\d+[a-z]?$/i.test(parts[0]!)) {
     return `${parts[0]} ${parts[1]}`;
   }
   return parts[0] ?? s;
