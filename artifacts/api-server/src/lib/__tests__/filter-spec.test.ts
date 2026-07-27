@@ -58,6 +58,12 @@ describe("detectFilterSpecFromText (regex fallback)", () => {
     expect(spec?.infrastructureOnParcel).toEqual(expect.arrayContaining(["storm", "sewer"]));
   });
 
+  it("treats serviced gentle sites as infrastructure and slope criteria", () => {
+    const spec = detectFilterSpecFromText("Find Serviced & Gentle Sites in St Heliers");
+    expect(spec?.maxSlopeDegrees).toBe(8);
+    expect(spec?.infrastructureOnParcel).toEqual(["storm", "sewer"]);
+  });
+
   it("extracts return percentage", () => {
     expect(detectFilterSpecFromText("What's on the market in Waikato with return over 7%")?.minRoiPct).toBe(7);
     expect(detectFilterSpecFromText("回报超过7%的房子")?.minRoiPct).toBe(7);

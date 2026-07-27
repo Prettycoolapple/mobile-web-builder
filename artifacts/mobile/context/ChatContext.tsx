@@ -455,6 +455,9 @@ export interface SchoolZoneDetail {
 
 export interface FeasibilityReport {
   address: string;
+  /** Ephemeral presentation hint for subdivision-layout requests. */
+  openAiSubdivision?: boolean;
+  openAiSubdivisionRequestKey?: string;
   /** Server search-history row id when this report was persisted. */
   historyId?: string | null;
   /** Server-created timestamp for history ordering when available. */
@@ -767,7 +770,13 @@ function sessionHasContent(s: Session): boolean {
 /** Strip on-device-only fields (file URIs invalid on other devices) before syncing. */
 function stripReportForSync<T extends FeasibilityReport | undefined>(report: T): T {
   if (!report) return report;
-  const { cachedPhotoUris, cachedPhotoSignature, ...rest } = report;
+  const {
+    cachedPhotoUris,
+    cachedPhotoSignature,
+    openAiSubdivision,
+    openAiSubdivisionRequestKey,
+    ...rest
+  } = report;
   return rest as T;
 }
 

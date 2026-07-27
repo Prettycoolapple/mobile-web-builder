@@ -9,10 +9,12 @@ import { FeasibilityReportCard } from "./FeasibilityReport";
 export function CombinedReportGroupCard({
   group,
   onFollowUp,
+  onFastTrackLodgement,
   onAnalyseProperty,
 }: {
   group: FeasibilityReportGroup;
-  onFollowUp: (question: string) => void;
+  onFollowUp: (question: string, displayText?: string) => void;
+  onFastTrackLodgement?: (report: FeasibilityReportGroup["reports"][number]) => void;
   onAnalyseProperty?: (address: string) => void;
 }) {
   const colors = useColors();
@@ -63,7 +65,7 @@ export function CombinedReportGroupCard({
                 </Text>
               </View>
             </View>
-            <FeasibilityReportCard report={report} onFollowUp={onFollowUp} onAnalyseProperty={onAnalyseProperty} />
+            <FeasibilityReportCard report={report} onFollowUp={onFollowUp} onFastTrackLodgement={onFastTrackLodgement} onAnalyseProperty={onAnalyseProperty} />
           </View>
         );
       })}

@@ -3,12 +3,14 @@ import {
   boundsFromParcel,
   expandLinzAerialTileRange,
   fallbackBoundsFromCenter,
+  hideLayersOutsideVisibleBounds,
   nearbyBoundaryLayer,
   paddedBounds,
   planningLayerStylePreview,
   selectLinzAerialTileRange,
   sitePlanMapBounds,
 } from "../site-plan";
+import type { SitePlanLayer } from "../site-plan";
 import type { LinzParcel } from "../linz";
 
 const parcel: LinzParcel = {
@@ -142,5 +144,69 @@ describe("site plan bounds", () => {
     expect(notableTrees?.kind).toBe("point");
     expect(notableTrees?.style.markerShape).toBe("triangle");
     expect(notableTrees?.style.fillOpacity).toBeGreaterThan(0.5);
+  });
+
+  it("hides legend layers whose council geometry is outside the visible map", () => {
+    const layer: SitePlanLayer = {
+      id: "service-water",
+      label: "Water Supply",
+      group: "services",
+      defaultVisible: false,
+      available: true,
+      style: { stroke: "#2563EB", strokeWidth: 3 },
+      legend: [{ label: "Water Supply", color: "#2563EB", kind: "line" }],
+      geojson: {
+        type: "FeatureCollection",
+        features: [{
+          type: "Feature",
+          properties: {},
+          geometry: {
+            type: "LineString",
+            coordinates: [[175.99, -38.64], [176, -38.64]],
+          },
+        }],
+      },
+    };
+
+    const [hidden] = hideLayersOutsideVisibleBounds([layer], {
+      minLng: 175.97,
+      maxLng: 175.98,
+      minLat: -38.625,
+      maxLat: -38.615,
+    });
+
+    expect(hidden).toMatchObject({ available: false, defaultVisible: false });
+    expect(hidden?.geojson.features).toEqual([]);
+  });
+
+  it("keeps and trims council geometry that is actually visible", () => {
+    const makeFeature = (lng: number, lat: number) => ({
+      type: "Feature" as const,
+      properties: {},
+      geometry: { type: "Point" as const, coordinates: [lng, lat] as [number, number] },
+    });
+    const layer: SitePlanLayer = {
+      id: "heritage",
+      label: "Heritage Item",
+      group: "planning",
+      defaultVisible: false,
+      available: true,
+      style: { stroke: "#A855F7", strokeWidth: 2 },
+      legend: [{ label: "Heritage Item", color: "#A855F7", kind: "point" }],
+      geojson: {
+        type: "FeatureCollection",
+        features: [makeFeature(172.6, -43.52), makeFeature(172.7, -43.6)],
+      },
+    };
+
+    const [visible] = hideLayersOutsideVisibleBounds([layer], {
+      minLng: 172.59,
+      maxLng: 172.61,
+      minLat: -43.53,
+      maxLat: -43.51,
+    });
+
+    expect(visible?.available).toBe(true);
+    expect(visible?.geojson.features).toHaveLength(1);
   });
 });

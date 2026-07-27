@@ -1097,6 +1097,17 @@ function finiteProfileCoordinate(value: number | null | undefined): number | nul
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function usableProfilePropertyType(value: string | null | undefined): string | null {
+  const clean = value?.trim() ?? "";
+  if (!clean) return null;
+  // The property API sometimes returns an internal category code (for example
+  // RF196B) rather than a user-facing typology. Never expose that as the
+  // Property type; let the exact listing-page metadata supply "Unit", "House",
+  // etc. instead.
+  if (/^[A-Z]{1,4}\d+[A-Z0-9]*$/i.test(clean)) return null;
+  return clean;
+}
+
 function profileListingId(profile: RealestatePropertyProfile): string | null {
   const currentId = profile.currentListings
     .map((listing) => String(listing.listingId ?? "").trim())
@@ -1134,7 +1145,9 @@ async function listingFromPropertyProfile(
 
   const photoBase = profile.photoPrimary?.baseUrl;
   const profilePhoto = photoBase ? `${MEDIA_BASE}${photoBase}.crop.1280x720.jpg` : null;
-  const profileMeta = mapped?.propertyType || profile.category?.trim()
+  const mappedPropertyType = usableProfilePropertyType(mapped?.propertyType);
+  const profilePropertyType = usableProfilePropertyType(profile.category);
+  const profileMeta = mappedPropertyType || profilePropertyType
     ? null
     : await fetchOgMeta(url).catch(() => null);
   const cvNzd = positiveProfileNumber(profile.councilEvaluations?.[0]?.capitalValue);
@@ -1153,7 +1166,7 @@ async function listingFromPropertyProfile(
     landAreaConfidence: "unverified",
     listingStatus: mapped?.listingStatus ?? "property_profile",
     floorArea,
-    propertyType: mapped?.propertyType ?? profileMeta?.propertyType ?? (profile.category?.trim() || null),
+    propertyType: mappedPropertyType ?? profileMeta?.propertyType ?? profilePropertyType,
     listingCategory: mapped?.listingCategory ?? profileMeta?.listingCategory ?? null,
     listingTitle: mapped?.listingTitle ?? profile.address.streetAddress ?? profile.address.fullAddress,
     description: mapped?.description ?? profileMeta?.description ?? null,

@@ -129,6 +129,7 @@ async function selectProviderForExplicitRequest(options: {
   requestedDiscipline: ProviderDiscipline | null;
   strategySuggestsDesignProfessional: boolean;
   excludeProviderIds: string[];
+  preferredEmails?: string[];
 }): Promise<ServiceProvider | null> {
   // The user named a discipline (e.g. "civil engineer" → engineer). Never
   // substitute a different role — apply the usual rotation chance within that
@@ -139,6 +140,7 @@ async function selectProviderForExplicitRequest(options: {
       preferredDiscipline: options.requestedDiscipline,
       strictDiscipline: true,
       excludeProviderIds: options.excludeProviderIds,
+      preferredEmails: options.preferredEmails,
     });
   }
 
@@ -147,12 +149,14 @@ async function selectProviderForExplicitRequest(options: {
       disciplineIn: ["architect_designer", "planner"],
       strictDiscipline: true,
       excludeProviderIds: options.excludeProviderIds,
+      preferredEmails: options.preferredEmails,
     });
     if (designProfessional) return designProfessional;
   }
 
   return selectServiceProvider({
     excludeProviderIds: options.excludeProviderIds,
+    preferredEmails: options.preferredEmails,
   });
 }
 
@@ -319,6 +323,7 @@ Set "recommend": true only when there are clear, explicit signals of intent or a
 
 async function selectServiceProvider(options?: {
   preferredDiscipline?: string | null;
+  preferredEmails?: string[];
   /** When set (and `preferredDiscipline` is not), keep providers whose discipline is in this list. */
   disciplineIn?: string[];
   excludeProviderIds?: string[];
@@ -339,6 +344,7 @@ async function selectServiceProvider(options?: {
   const baseQuery = db
     .select({
       id: profiles.id,
+      email: profiles.email,
       fullName: profiles.fullName,
       avatarUrl: profiles.avatarUrl,
       isVerified: profiles.isVerified,
@@ -376,6 +382,16 @@ async function selectServiceProvider(options?: {
         normaliseProviderName(r.fullName),
       ),
   );
+
+  const preferredEmails = new Set(
+    (options?.preferredEmails ?? []).map((email) => email.trim().toLowerCase()).filter(Boolean),
+  );
+  if (preferredEmails.size > 0) {
+    candidates = candidates.filter((candidate) =>
+      preferredEmails.has(candidate.email.trim().toLowerCase()),
+    );
+    if (candidates.length === 0) return null;
+  }
 
   if (preferredDiscipline) {
     const matched = candidates.filter(
@@ -453,6 +469,7 @@ router.post(
         explicitRequest = false,
         askForOthers = false,
         preferredDiscipline,
+        preferredProviderEmails = [],
         excludeProviderIds = [],
       } = req.body as {
         report?: FeasibilityReport;
@@ -460,6 +477,7 @@ router.post(
         explicitRequest?: boolean;
         askForOthers?: boolean;
         preferredDiscipline?: string;
+        preferredProviderEmails?: string[];
         excludeProviderIds?: string[];
       };
 
@@ -479,6 +497,7 @@ router.post(
           requestedDiscipline,
           strategySuggestsDesignProfessional,
           excludeProviderIds,
+          preferredEmails: preferredProviderEmails,
         });
         if (!provider) {
           res.json({

@@ -152,7 +152,8 @@ function SafeMarkdown({
 
 interface Props {
   message: ChatMessage;
-  onFollowUp: (question: string) => void;
+  onFollowUp: (question: string, displayText?: string) => void;
+  onFastTrackLodgement?: (report: FeasibilityReport) => void;
   onDiscoveryChoice?: (message: ChatMessage, option: string, optionIndex: number) => void;
   onAnalyse: (address: string, photoUrl?: string | null, listingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, analysisKey?: string) => void;
   onAddressConfirm?: (address: string) => void;
@@ -317,7 +318,7 @@ function TypingDots() {
   );
 }
 
-export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, onAddressConfirm, onAnalyseProperty, analysingPropertyKey, onRetry, onConnect, onDismiss, onAgentDismiss, onLimTitleRequest, onLimTitleDecline, onUpgrade, onShowMore, onSearchResultLayout }: Props) {
+export function ChatBubble({ message, onFollowUp, onFastTrackLodgement, onDiscoveryChoice, onAnalyse, onAddressConfirm, onAnalyseProperty, analysingPropertyKey, onRetry, onConnect, onDismiss, onAgentDismiss, onLimTitleRequest, onLimTitleDecline, onUpgrade, onShowMore, onSearchResultLayout }: Props) {
   const colors = useColors();
   const { t } = useT();
   const router = useRouter();
@@ -445,7 +446,7 @@ export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, 
     return (
       <View style={styles.reportContainer}>
         <ReportErrorBoundary>
-          <FeasibilityReportCard report={message.report} onFollowUp={onFollowUp} onAnalyseProperty={onAnalyseProperty} />
+          <FeasibilityReportCard report={message.report} onFollowUp={onFollowUp} onFastTrackLodgement={onFastTrackLodgement} onAnalyseProperty={onAnalyseProperty} />
         </ReportErrorBoundary>
       </View>
     );
@@ -455,7 +456,7 @@ export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, 
     return (
       <View style={styles.reportContainer}>
         <ReportErrorBoundary>
-          <CombinedReportGroupCard group={message.reportGroup} onFollowUp={onFollowUp} onAnalyseProperty={onAnalyseProperty} />
+          <CombinedReportGroupCard group={message.reportGroup} onFollowUp={onFollowUp} onFastTrackLodgement={onFastTrackLodgement} onAnalyseProperty={onAnalyseProperty} />
         </ReportErrorBoundary>
       </View>
     );
@@ -553,7 +554,7 @@ export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, 
       return (
         <View style={styles.reportContainer}>
           <ReportErrorBoundary>
-            <FeasibilityReportCard report={structured.report} onFollowUp={onFollowUp} onAnalyseProperty={onAnalyseProperty} />
+            <FeasibilityReportCard report={structured.report} onFollowUp={onFollowUp} onFastTrackLodgement={onFastTrackLodgement} onAnalyseProperty={onAnalyseProperty} />
           </ReportErrorBoundary>
         </View>
       );
@@ -562,7 +563,7 @@ export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, 
       return (
         <View style={styles.reportContainer}>
           <ReportErrorBoundary>
-            <CombinedReportGroupCard group={structured.group} onFollowUp={onFollowUp} onAnalyseProperty={onAnalyseProperty} />
+            <CombinedReportGroupCard group={structured.group} onFollowUp={onFollowUp} onFastTrackLodgement={onFastTrackLodgement} onAnalyseProperty={onAnalyseProperty} />
           </ReportErrorBoundary>
         </View>
       );

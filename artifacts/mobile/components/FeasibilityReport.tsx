@@ -66,7 +66,8 @@ const SHOW_COMPARABLE_SALES_IN_UI = false;
 
 interface Props {
   report: Report;
-  onFollowUp: (question: string) => void;
+  onFollowUp: (question: string, displayText?: string) => void;
+  onFastTrackLodgement?: (report: Report) => void;
   onAnalyseProperty?: (address: string) => void;
 }
 
@@ -2446,9 +2447,11 @@ function shuffleFollowUpChips(chips: string[]): string[] {
   return shuffled;
 }
 
-function FollowUpChips({ report, onChipClick, colors }: {
+function FollowUpChips({ report, onChipClick, onVisualizeSubdivision, onFastTrackLodgement, colors }: {
   report: Report;
-  onChipClick: (msg: string) => void;
+  onChipClick: (msg: string, displayText?: string) => void;
+  onVisualizeSubdivision: () => void;
+  onFastTrackLodgement: () => void;
   colors: ReturnType<typeof useColors>;
 }) {
   const { t } = useT();
@@ -2483,9 +2486,34 @@ function FollowUpChips({ report, onChipClick, colors }: {
     }
     randomisedChips.push(t("report.followup_explain_zone", { zone }));
 
+    const fixedChips = [
+      {
+        label: t("report.action_lim_title"),
+        onPress: () => onChipClick("Request the LIM and Title documents for this property", t("report.action_lim_title")),
+      },
+      {
+        label: t("report.action_visualize_subdivision"),
+        onPress: onVisualizeSubdivision,
+      },
+      {
+        label: t("report.action_fast_track"),
+        onPress: onFastTrackLodgement,
+      },
+      {
+        label: t("report.followup_contact_sales_agent"),
+        onPress: () => onChipClick("Contact the sales agent for this property", t("report.followup_contact_sales_agent")),
+      },
+      {
+        label: t("report.action_get_started"),
+        onPress: () => onChipClick("How do I get started with developing this property?", t("report.action_get_started")),
+      },
+    ];
     return [
-      t("report.followup_contact_sales_agent"),
-      ...shuffleFollowUpChips(randomisedChips),
+      ...fixedChips,
+      ...shuffleFollowUpChips(randomisedChips).map((label) => ({
+        label,
+        onPress: () => onChipClick(label),
+      })),
     ];
   }, [
     asbestosRisk,
@@ -2497,6 +2525,9 @@ function FollowUpChips({ report, onChipClick, colors }: {
     report.asbestos,
     report.historyCreatedAt,
     report.historyId,
+    onChipClick,
+    onFastTrackLodgement,
+    onVisualizeSubdivision,
     t,
     zone,
   ]);
@@ -2512,10 +2543,10 @@ function FollowUpChips({ report, onChipClick, colors }: {
             <TouchableOpacity
               key={i}
               style={[styles.chip, { backgroundColor: "#F0FDF4", borderColor: "#10B981" }]}
-              onPress={() => onChipClick(chip)}
+              onPress={chip.onPress}
               activeOpacity={0.7}
             >
-              <Text style={{ color: "#065F46", fontFamily: "DM_Sans_400Regular", fontSize: 13 }}>{chip}</Text>
+              <Text style={{ color: "#065F46", fontFamily: "DM_Sans_400Regular", fontSize: 13 }}>{chip.label}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -2615,7 +2646,7 @@ function SchoolZonesPanel({ zones, colors }: { zones: SchoolZoneDetail[]; colors
   );
 }
 
-export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }: Props) {
+export function FeasibilityReportCard({ report, onFollowUp, onFastTrackLodgement, onAnalyseProperty }: Props) {
   const colors = useColors();
   const { t, locale } = useT();
   const { getApiHeaders, user } = useAuth();
@@ -2633,8 +2664,18 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
   // carousel showing the new photos immediately.
   const [refreshedPhotoUrls, setRefreshedPhotoUrls] = useState<string[] | null>(null);
   const [isRefreshingPhotos, setIsRefreshingPhotos] = useState(false);
-  const [activeReportTab, setActiveReportTab] = useState<"info" | "plan">("info");
-  const [hasOpenedPlanTab, setHasOpenedPlanTab] = useState(false);
+  const [activeReportTab, setActiveReportTab] = useState<"info" | "plan">(
+    report.openAiSubdivision ? "plan" : "info",
+  );
+  const [hasOpenedPlanTab, setHasOpenedPlanTab] = useState(Boolean(report.openAiSubdivision));
+  const [aiSubdivisionLaunchNonce, setAiSubdivisionLaunchNonce] = useState(0);
+
+  useEffect(() => {
+    if (!report.openAiSubdivision) return;
+    setHasOpenedPlanTab(true);
+    setActiveReportTab("plan");
+    setAiSubdivisionLaunchNonce((value) => value + 1);
+  }, [report.openAiSubdivision, report.openAiSubdivisionRequestKey]);
 
   const effectiveReport = useMemo<Report>(() => {
     if (!refreshedPhotoUrls || refreshedPhotoUrls.length === 0) return report;
@@ -2942,7 +2983,12 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
         )}
         </View>
         {hasOpenedPlanTab && activeReportTab === "plan" ? (
-          <SitePlanCard key={`${report.historyId ?? report.address ?? "report"}-site-plan`} report={report} />
+          <SitePlanCard
+            key={`${report.historyId ?? report.address ?? "report"}-site-plan`}
+            report={report}
+            autoOpenAiSubdivision={Boolean(report.openAiSubdivision)}
+            launchAiSubdivisionNonce={aiSubdivisionLaunchNonce}
+          />
         ) : null}
       </View>
 
@@ -3246,8 +3292,18 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
         </SectionCard>
       )}
 
-      <FollowUpChips report={report} onChipClick={onFollowUp} colors={colors} />
       <ReportAnalysisFootnote colors={colors} />
+      <FollowUpChips
+        report={report}
+        onChipClick={onFollowUp}
+        onVisualizeSubdivision={() => {
+          setHasOpenedPlanTab(true);
+          setActiveReportTab("plan");
+          setAiSubdivisionLaunchNonce((value) => value + 1);
+        }}
+        onFastTrackLodgement={() => onFastTrackLodgement?.(report)}
+        colors={colors}
+      />
     </View>
   );
 }

@@ -101,6 +101,67 @@ export interface SitePlanResponse {
   layers: SitePlanLayer[];
 }
 
+function geometryPositions(geometry: GeoJsonGeometry): GeoJsonPosition[] {
+  switch (geometry.type) {
+    case "Point":
+      return [geometry.coordinates];
+    case "LineString":
+      return geometry.coordinates;
+    case "MultiLineString":
+    case "Polygon":
+      return geometry.coordinates.flat();
+    case "MultiPolygon":
+      return geometry.coordinates.flat(2);
+  }
+}
+
+function featureIntersectsBounds(feature: GeoJsonFeature, bounds: SitePlanBounds): boolean {
+  const positions = geometryPositions(feature.geometry);
+  if (positions.length === 0) return false;
+  let minLng = Number.POSITIVE_INFINITY;
+  let maxLng = Number.NEGATIVE_INFINITY;
+  let minLat = Number.POSITIVE_INFINITY;
+  let maxLat = Number.NEGATIVE_INFINITY;
+  for (const [lng, lat] of positions) {
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+    minLng = Math.min(minLng, lng);
+    maxLng = Math.max(maxLng, lng);
+    minLat = Math.min(minLat, lat);
+    maxLat = Math.max(maxLat, lat);
+  }
+  return Number.isFinite(minLng)
+    && maxLng >= bounds.minLng
+    && minLng <= bounds.maxLng
+    && maxLat >= bounds.minLat
+    && minLat <= bounds.maxLat;
+}
+
+/**
+ * A council query can intentionally search much farther than the visible Site
+ * Plan (for example rural Taupō water mains). A non-empty response must not
+ * create a legend toggle when every returned feature is outside the map.
+ */
+export function hideLayersOutsideVisibleBounds(
+  layers: SitePlanLayer[],
+  bounds: SitePlanBounds,
+): SitePlanLayer[] {
+  return layers.map((layer) => {
+    if (layer.group !== "planning" && layer.group !== "services") return layer;
+    const features = layer.geojson.features.filter((feature) => featureIntersectsBounds(feature, bounds));
+    if (features.length > 0) {
+      return features.length === layer.geojson.features.length
+        ? layer
+        : { ...layer, geojson: { ...layer.geojson, features } };
+    }
+    return {
+      ...layer,
+      available: false,
+      defaultVisible: false,
+      geojson: { ...layer.geojson, features: [] },
+    };
+  });
+}
+
 type ArcGisGeometry = {
   rings?: unknown;
   paths?: unknown;
@@ -1409,7 +1470,7 @@ export async function buildSitePlanForAddress(
     layers: [
       nearbyBoundaryLayer(nearbyParcels, parcel),
       boundaryLayer(parcel),
-      ...extraLayers,
+      ...hideLayersOutsideVisibleBounds(extraLayers, image.bounds),
     ],
   };
 }
@@ -1476,7 +1537,7 @@ async function buildNationalSitePlanForGeo(
     layers: [
       nearbyBoundaryLayer(nearbyParcels, parcel),
       boundaryLayer(parcel),
-      ...extraLayers,
+      ...hideLayersOutsideVisibleBounds(extraLayers, image.bounds),
     ],
   };
 }

@@ -267,6 +267,7 @@ When a property_discovery request names MEASURABLE criteria, ALSO populate filte
   - "split into N lots" / "可分割成N套/N块" / "subdivide into N" → minPotentialLots = N (integer ≥ 2).
   - "flat" / "基本平地/平地" → maxSlopeDegrees = 3;  "gentle/slight slope" / "坡小/缓坡" → maxSlopeDegrees = 8.
   - services/pipes on the land/parcel: "管道都在地上" / "上下水在红线内" / "services on the parcel" → infrastructureOnParcel = ["storm","sewer"] (add "water" if water supply is named).
+  - "serviced sites/sections/land" means usable stormwater and wastewater servicing → infrastructureOnParcel = ["storm","sewer"].
   - "return/yield over X%" / "回报超过X%" → minRoiPct = X.
   - searchScope: default "both"; "already analysed / 在你数据库里" → "analyzed_index"; "on the market now / 在售" → "live_market".
 For dwelling-condition criteria, set filterSpec.dwellingCondition to "older_do_up" for old/original/do-up homes, "avoid_recent_improvement" when the user wants to avoid renovated/new-build premium, and "recent_improvement" when the user asks for recently renovated/modernised homes.
@@ -285,6 +286,8 @@ Critical distinction:
   "show me subdividable properties in Coatesville" => property_discovery, subject=subdivision, execution=show_listing_cards, mode=discover, discoveryPresentation=scored_screening.
   "which listings in Coatesville can be subdivided?" => property_discovery, subject=subdivision, execution=show_listing_cards, mode=discover, discoveryPresentation=scored_screening.
   "can 12 Smith Road be subdivided?" => single_property_analysis, subject=subdivision, execution=run_feasibility_report, mode=analyse.
+  "show me a layout for 12 Smith Road" / "generate a layout for 12 Smith Road" => single_property_analysis, subject=subdivision, execution=run_feasibility_report, mode=analyse. Treat requests for a site layout, subdivision layout, lot layout, or subdivision plan at a numbered address as subdivision-analysis intent even when the user does not say "feasibility".
+  When a report is already open, "visualize subdivision options", "show/generate the subdivision layout", "site scheme", "一键生成AI分割布局", and semantic equivalents are followup, subject=subdivision, execution=answer_in_chat. Do not run the feasibility report again.
   If the previous conversation discussed subdivision but the latest user message is a fresh plain availability search in another suburb, reset to discoveryPresentation=generic_listing.
 
 The legacy mode field must agree with execution:
@@ -757,16 +760,16 @@ export function detectFilterSpecFromText(text: string): SearchFilterSpec | null 
   // Slope: flat ≈ ≤3°, gentle ≈ ≤8°
   let maxSlopeDegrees: number | null = null;
   if (/基本平地|平地|平坦|\bflat\b/i.test(text)) maxSlopeDegrees = 3;
-  if (/坡小|缓坡|緩坡|gentle\s+slop|slight\s+slop|mild\s+slop/i.test(text)) {
+  if (/坡小|缓坡|緩坡|\bgentle\b|gentle\s+slop|slight\s+slop|mild\s+slop/i.test(text)) {
     maxSlopeDegrees = Math.max(maxSlopeDegrees ?? 0, 8);
   }
 
   // Services/pipes on the parcel.
   const mentionsPipes =
-    /管道|上下水|下水|污水|雨水|管线|管線/.test(text) || /storm\s*water|stormwater|sewer|wastewater|\bpipes?\b|\bservices?\b|utilit/.test(t);
+    /管道|上下水|下水|污水|雨水|管线|管線/.test(text) || /storm\s*water|stormwater|sewer|wastewater|\bpipes?\b|\bservices?\b|\bserviced\b|utilit/.test(t);
   const onParcel =
     /在地上|在红线内|在紅線內|红线内|紅線內|地里|地裡/.test(text) ||
-    /on[-\s]?(?:the\s+)?(?:parcel|site|land|section|property)|within\s+(?:the\s+)?(?:boundary|parcel|site)|on\s+site/.test(t);
+    /on[-\s]?(?:the\s+)?(?:parcel|site|land|section|property)|within\s+(?:the\s+)?(?:boundary|parcel|site)|on\s+site|\bserviced\b.{0,32}\b(?:sites?|land|sections?|properties)\b/.test(t);
   const infrastructureOnParcel: ("storm" | "sewer" | "water")[] = [];
   if (mentionsPipes && onParcel) {
     infrastructureOnParcel.push("storm", "sewer"); // the two the queries care about
@@ -1809,6 +1812,7 @@ export async function generateUnifiedResponse(
     const pinnedSection =
       `CRITICAL INSTRUCTION — FOLLOW-UP RESPONSE RULES:\n` +
       `You are answering a follow-up question about the property analysed in this session.\n` +
+      `This answer is displayed on a phone. Give the direct answer first, then only the 2-4 most useful short points (normally 60-140 words), and end an explanatory/advisory answer with exactly one useful next-step question.\n` +
       `ALL figures, classifications, scores, and facts below come from verified pipeline data (LINZ, LiDAR, Auckland Council GIS, QV).\n` +
       `You MUST base your answer ONLY on this data. You MUST NOT:\n` +
       `  - claim the property is standalone/freehold/subdividable unless the pinned title, typology, and eligibility fields say so with verified confidence\n` +

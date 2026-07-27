@@ -729,6 +729,7 @@ export default function SearchScreen() {
     explicitRequest?: boolean;
     askForOthers?: boolean;
     preferredDiscipline?: string | null;
+    preferredProviderEmails?: string[];
     excludeProviderIds?: string[];
     delayMs?: number;
     showNoProviderText?: boolean;
@@ -751,6 +752,7 @@ export default function SearchScreen() {
             explicitRequest: Boolean(args.explicitRequest),
             askForOthers: Boolean(args.askForOthers),
             preferredDiscipline: args.preferredDiscipline ?? null,
+            preferredProviderEmails: args.preferredProviderEmails ?? [],
             excludeProviderIds: args.excludeProviderIds ?? existingProviderIds,
           }),
         });
@@ -1927,6 +1929,7 @@ export default function SearchScreen() {
             reportGroup?: FeasibilityReportGroup | null;
             postAnalysisAnswer?: string | null;
             postAnalysisAnswers?: string[];
+            openAiSubdivision?: boolean;
             wantsProviderRecommendation?: boolean;
             wantsAnotherProvider?: boolean;
             suggestedDiscipline?: string | null;
@@ -1963,6 +1966,7 @@ export default function SearchScreen() {
               bumpSearchHistory();
             } else if (data.report) {
               const reportWithHistory = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
+              if (data.openAiSubdivision === true) reportWithHistory.openAiSubdivision = true;
               if (currentSessionId === job.sessionId) {
                 setCurrentReport(reportWithHistory);
               }
@@ -2030,6 +2034,7 @@ export default function SearchScreen() {
             historyCreatedAt?: string | null;
             postAnalysisAnswer?: string | null;
             postAnalysisAnswers?: string[];
+            openAiSubdivision?: boolean;
             wantsProviderRecommendation?: boolean;
             wantsAnotherProvider?: boolean;
             suggestedDiscipline?: string | null;
@@ -2078,6 +2083,7 @@ export default function SearchScreen() {
       }
       if (reportFromScreening && (reportFromScreening.scores || reportFromScreening.address)) {
         const reportWithHistory = withHistoryMetadata(reportFromScreening, data.searchId, data.historyCreatedAt);
+        if (data.openAiSubdivision === true) reportWithHistory.openAiSubdivision = true;
         if (currentSessionId === job.sessionId) setCurrentReport(reportWithHistory);
         replaceBackgroundAnalyseMessage(job.jobId, { role: "assistant", content: "", type: "report", report: reportWithHistory }, job.sessionId);
         appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, job.sessionId);
@@ -3009,6 +3015,7 @@ export default function SearchScreen() {
             suggestedDiscipline?: string | null;
             postAnalysisAnswer?: string | null;
             postAnalysisAnswers?: string[];
+            openAiSubdivision?: boolean;
           };
           try {
             data = JSON.parse(responseText.trim()) as typeof data;
@@ -3016,6 +3023,29 @@ export default function SearchScreen() {
             // Body may itself be a raw feasibility report or discover payload
             const fallback = extractJSON(responseText) as { content?: string; mode?: string } | null;
             data = { content: fallback?.content ?? responseText, mode: fallback?.mode ?? "" };
+          }
+
+          // A subdivision-layout request made while a report is already open is
+          // a presentation action, not a fresh analysis. Update the existing
+          // report card so it switches to Plan and opens the AI intro slides.
+          if (data.openAiSubdivision === true && currentReport && !data.report && !data.reportGroup) {
+            const reportWithAction = {
+              ...currentReport,
+              openAiSubdivision: true,
+              openAiSubdivisionRequestKey: `${Date.now()}`,
+            };
+            const reportMessage = [...(currentSession?.messages ?? [])]
+              .reverse()
+              .find((message) => message.type === "report" && message.report);
+            if (reportMessage) {
+              updateMessage(reportMessage.id, { report: reportWithAction }, sessionId);
+            }
+            setCurrentReport(reportWithAction);
+            updateLastMessage({
+              type: "text",
+              content: t("report.action_opening_subdivision"),
+            }, sessionId);
+            return;
           }
 
           // Capture LLM-derived provider recommendation signals for use in finally.
@@ -3058,6 +3088,7 @@ export default function SearchScreen() {
 
           if (data.report) {
             const reportObj = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
+            if (data.openAiSubdivision === true) reportObj.openAiSubdivision = true;
             providerReportSnapshot = reportObj;
             setCurrentReport(reportObj);
             updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
@@ -3148,6 +3179,7 @@ export default function SearchScreen() {
               bumpSearchHistory();
             } else if (maybeParsed && isFeasibilityReport(maybeParsed)) {
               const reportObj = withHistoryMetadata(maybeParsed as unknown as FeasibilityReport, data.searchId, data.historyCreatedAt);
+              if (data.openAiSubdivision === true) reportObj.openAiSubdivision = true;
               providerReportSnapshot = reportObj;
               setCurrentReport(reportObj);
               updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
@@ -3194,6 +3226,7 @@ export default function SearchScreen() {
               bumpSearchHistory();
             } else if (isFeasibilityReport(maybeParsed)) {
               const reportObj = withHistoryMetadata(maybeParsed as unknown as FeasibilityReport, data.searchId, data.historyCreatedAt);
+              if (data.openAiSubdivision === true) reportObj.openAiSubdivision = true;
               providerReportSnapshot = reportObj;
               setCurrentReport(reportObj);
               updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
@@ -3321,10 +3354,30 @@ export default function SearchScreen() {
   ]);
 
   const handleFollowUp = useCallback(
-    (question: string) => {
-      void handleSend(question);
+    (question: string, displayText?: string) => {
+      void handleSend(question, false, undefined, undefined, displayText);
     },
     [handleSend],
+  );
+
+  const handleFastTrackLodgement = useCallback(
+    (report: FeasibilityReport) => {
+      const sessionId = currentSessionId ?? currentSession?.id;
+      if (!sessionId) return;
+      scheduleProviderRecommendationCheck({
+        sessionId,
+        report,
+        explicitRequest: true,
+        preferredDiscipline: "planner",
+        preferredProviderEmails: [
+          "kath.yuan@knh.nz",
+          "mike.yu@avantplanning.co.nz",
+        ],
+        delayMs: 0,
+        showNoProviderText: true,
+      });
+    },
+    [currentSession?.id, currentSessionId, scheduleProviderRecommendationCheck],
   );
 
   // Exhausted-discovery choice chips ("see again" / "search nearby"). Unlike a
@@ -3845,6 +3898,7 @@ export default function SearchScreen() {
           <ChatBubble
             message={item}
             onFollowUp={handleFollowUp}
+            onFastTrackLodgement={handleFastTrackLodgement}
             onDiscoveryChoice={handleDiscoveryChoice}
             onAnalyse={handleCardAnalyse}
             onAddressConfirm={handleAddressConfirm}
@@ -3863,7 +3917,7 @@ export default function SearchScreen() {
         </View>
       );
     },
-    [handleFollowUp, handleDiscoveryChoice, handleCardAnalyse, handleAddressConfirm, handleAnalyseProperty, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss, openLimTitleConsent, declineLimTitleOffer, handleShowMore, handleSearchResultLayout],
+    [handleFollowUp, handleFastTrackLodgement, handleDiscoveryChoice, handleCardAnalyse, handleAddressConfirm, handleAnalyseProperty, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss, openLimTitleConsent, declineLimTitleOffer, handleShowMore, handleSearchResultLayout],
   );
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
@@ -4465,12 +4519,7 @@ export default function SearchScreen() {
               </View>
 
               {/* Suggestion chips — each chip must not shrink so text stays readable */}
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={styles.suggestions}
-                contentContainerStyle={{ gap: 8, paddingHorizontal: 2 }}
-              >
+              <View style={styles.suggestions}>
                 {SUGGESTION_QUERIES.map((q) => (
                   <TouchableOpacity
                     key={q}
@@ -4481,13 +4530,12 @@ export default function SearchScreen() {
                     <Feather name="search" size={11} color={colors.accent} />
                     <Text
                       style={[styles.suggestionText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                      numberOfLines={1}
                     >
                       {q}
                     </Text>
                   </TouchableOpacity>
                 ))}
-              </ScrollView>
+              </View>
             </View>
           </View>
         </Pressable>
@@ -4997,6 +5045,11 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   suggestions: {
+    width: "100%",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    paddingHorizontal: 2,
     paddingBottom: 2,
   },
   micButtonSlot: {
@@ -5080,13 +5133,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     // Critical: prevent the ScrollView from squashing individual chips
-    flexShrink: 0,
+    maxWidth: "100%",
+    flexShrink: 1,
   },
   suggestionText: {
     fontSize: 13,
     lineHeight: 18,
     // Don't allow wrapping — the chip is sized to its content
-    flexShrink: 0,
+    flexShrink: 1,
   },
   // ── Chat state ─────────────────────────────────────────────────────
   messageList: {

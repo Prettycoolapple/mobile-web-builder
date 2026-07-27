@@ -414,6 +414,11 @@ export interface RawPropertyData {
   qv: QVData | null;
   homes: HomesData | null;
   propertyValue: PropertyValueData | null;
+  /** Exact address-matched realestate.co.nz property-profile facts. Unlike an
+   * active listing, these stable dwelling facts are cached so unit/cross-lease
+   * reports do not lose bedrooms, bathrooms, floor area or build information
+   * when the live profile endpoint is temporarily unavailable. */
+  realestate_property_profile?: ListingResult | null;
   neighbourhood_context: NeighbourhoodContext | null;
   transport_context: TransportContext | null;
   built_environment_context?: BuiltEnvironmentContext | null;
@@ -429,7 +434,7 @@ export interface RawPropertyData {
   derived_scores?: DerivedCardScores;
 }
 
-export const RAW_PROPERTY_SCHEMA_VERSION = 13;
+export const RAW_PROPERTY_SCHEMA_VERSION = 14;
 export const SITE_CLASSIFICATION_VERSION = 2;
 
 export interface PipelineResult {
@@ -589,6 +594,18 @@ function stripOneRoofVolatile(d: OneRoofData | null): OneRoofData | null {
   return clone as unknown as OneRoofData;
 }
 
+/** Preserve stable, exact property-profile facts while removing listing media
+ * and marketing copy that can change independently of the property record. */
+function stripRealestateProfileVolatile(profile: ListingResult | null): ListingResult | null {
+  if (!profile) return null;
+  return {
+    ...profile,
+    description: null,
+    photoUrl: null,
+    photoUrls: [],
+  };
+}
+
 async function timed<T>(
   label: string,
   fn: () => Promise<T>,
@@ -635,7 +652,8 @@ export async function runPropertyPipeline(
   const failedSources: string[] = [];
   const pipelineStart = Date.now();
   let preferredRealestateListing: ListingResult | null = null;
-  let realestatePropertyProfile: ListingResult | null = null;
+  let realestatePropertyProfile: ListingResult | null =
+    options.cachedRaw?.realestate_property_profile ?? null;
 
   // Global property cache: when present, leaf external fetches below resolve from
   // `cr` instead of the network. The derived/financial layer is untouched and
@@ -2019,6 +2037,7 @@ export async function runPropertyPipeline(
     qv: stripScraperPhotos(qvData),
     homes: stripScraperPhotos(homesData),
     propertyValue: stripScraperPhotos(propertyValueData),
+    realestate_property_profile: stripRealestateProfileVolatile(realestatePropertyProfile),
     neighbourhood_context: neighbourhoodContext,
     transport_context: transportContext,
     built_environment_context: builtEnvironmentContext,

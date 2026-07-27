@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
-import { db, profiles, searches, feasibilityJobs, screeningJobs, salesAgentProfiles, listings, discoveryContinuations, withDbRetry, type DiscoveryContinuationState } from "@workspace/db";
+import { db, profiles, searches, feasibilityJobs, screeningJobs, salesAgentProfiles, listings, discoveryContinuations, propertyCache, withDbRetry, type DiscoveryContinuationState } from "@workspace/db";
 import { agentAiUnlimited } from "../lib/agent-entitlements";
 import { logger } from "../lib/logger";
 import {
@@ -49,6 +49,7 @@ import { detectPropertyDataLookup, buildPropertyDataLookupAnswer } from "../lib/
 import { buildSitePlanForReport, SitePlanNoLocationError, fetchAerialTile, type GeoHint } from "../lib/site-plan";
 import { dwellingConditionRiskBullet } from "../lib/dwelling-condition";
 import { noteUserActivity } from "../lib/user-activity";
+import { isSubdivisionLayoutRequest } from "../lib/subdivision-layout-intent";
 import { buildSubdivisionPathwayNote } from "../lib/lot-calculator";
 import {
   canonicalBuildYearFromReport,
@@ -510,6 +511,17 @@ async function enrichRecentSalesRecordsFromCache(records: RecentSaleRecord[]): P
 }
 
 const router = Router();
+
+async function pickCachedDiscoverySuburb(): Promise<string | null> {
+  const rows = await db
+    .select({ suburb: propertyCache.suburb })
+    .from(propertyCache)
+    .where(sql`${propertyCache.suburb} is not null and trim(${propertyCache.suburb}) <> ''`)
+    .groupBy(propertyCache.suburb)
+    .orderBy(sql`random()`)
+    .limit(1);
+  return rows[0]?.suburb?.trim().toLowerCase() || null;
+}
 
 /**
  * Finds the substring for the outermost `{ ... }` by brace depth, respecting
@@ -6363,18 +6375,38 @@ router.post(
       const providerSignal = {
         ...(wantsProviderRecommendation ? { wantsProviderRecommendation: true, suggestedDiscipline: suggestedProviderDiscipline ?? null } : {}),
         ...(wantsAnotherProvider ? { wantsAnotherProvider: true } : {}),
+        ...(
+          intent.subject === "subdivision" &&
+          (semanticWantsAnalysis || (Boolean(reportCtx) && isSubdivisionLayoutRequest(userText)))
+            ? { openAiSubdivision: true }
+            : {}
+        ),
       };
       const latestAssistantText = [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
       const recentAssistantAskedForSearchArea =
         /(suburb|area|neighbou?rhood|where should|which.+search|区域|郊区|哪个区|哪個區|地方|哪里|哪裡)/i.test(latestAssistantText);
       const shouldResolveDelegatedDiscover =
         !intent.suburb && (semanticWantsDiscovery || (intent.needsClarification && mode === "discover") || (recentAssistantAskedForSearchArea && semanticWantsDiscovery));
-      const delegatedDiscoverSuburb = shouldResolveDelegatedDiscover
+      let delegatedDiscoverSuburb = shouldResolveDelegatedDiscover
         ? await resolveDelegatedDiscoverSuburb(messages, userText, chatLocale).catch((err) => {
             req.log.warn({ err, sample: userText.slice(0, 80) }, "Delegated suburb resolution failed");
             return null;
           })
         : null;
+      if (shouldResolveDelegatedDiscover && !delegatedDiscoverSuburb) {
+        const cachedSuburb = await pickCachedDiscoverySuburb().catch((err) => {
+          req.log.warn({ err }, "Discovery: cached default suburb lookup failed");
+          return null;
+        });
+        if (cachedSuburb) {
+          delegatedDiscoverSuburb = {
+            suburb: cachedSuburb,
+            candidates: [cachedSuburb],
+            reasoning: "No suburb supplied; selected from the existing analysed-property cache",
+            source: "history_suggestions",
+          };
+        }
+      }
       if (delegatedDiscoverSuburb) {
         req.log.info(
           {

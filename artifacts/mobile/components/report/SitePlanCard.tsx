@@ -104,6 +104,8 @@ type SitePlanResponse = {
 
 type Props = {
   report: Report;
+  autoOpenAiSubdivision?: boolean;
+  launchAiSubdivisionNonce?: number;
 };
 
 type LayerGroupCache = {
@@ -463,7 +465,7 @@ function LayerToggleRow({
   );
 }
 
-export function SitePlanCard({ report }: Props) {
+export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSubdivisionNonce = 0 }: Props) {
   const colors = useColors();
   const { t } = useT();
   const { getApiHeaders, user } = useAuth();
@@ -471,6 +473,8 @@ export function SitePlanCard({ report }: Props) {
   const searchId = report.historyId ?? null;
   const planHeight = Math.min(430, Math.max(310, viewportWidth - 42));
   const [showAiModal, setShowAiModal] = useState(false);
+  const didAutoOpenAiSubdivisionRef = useRef(false);
+  const lastLaunchAiSubdivisionNonceRef = useRef(0);
   const aiBreath = useSharedValue(0);
   const reduceMotion = useReducedMotion();
   const aiInterestEventRef = useRef<Promise<string | null> | null>(null);
@@ -707,6 +711,15 @@ export function SitePlanCard({ report }: Props) {
       })
       .catch(() => null);
   };
+
+  useEffect(() => {
+    const shouldAutoOpen = autoOpenAiSubdivision && !didAutoOpenAiSubdivisionRef.current;
+    const shouldOpenFromAction = launchAiSubdivisionNonce > lastLaunchAiSubdivisionNonceRef.current;
+    if (!shouldAutoOpen && !shouldOpenFromAction) return;
+    if (shouldAutoOpen) didAutoOpenAiSubdivisionRef.current = true;
+    lastLaunchAiSubdivisionNonceRef.current = launchAiSubdivisionNonce;
+    recordAiSubdivisionInterest();
+  }, [autoOpenAiSubdivision, launchAiSubdivisionNonce]);
 
   const completeAiSubdivisionInterest = () => {
     const eventPromise = aiInterestEventRef.current;
