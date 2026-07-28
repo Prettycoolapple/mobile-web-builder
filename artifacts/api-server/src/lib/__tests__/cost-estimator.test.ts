@@ -300,6 +300,9 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     const thamesCoromandelDefault = estimateCosts(property, 1, {
       cost_profile: regionalCostProfileForProvider("thames-coromandel"),
     });
+    const bullerDefault = estimateCosts(property, 1, {
+      cost_profile: regionalCostProfileForProvider("buller"),
+    });
     const customProfile = regionalCostProfileForProvider("whangarei");
     customProfile.construction.baseLowPerSqm = 3_000;
     customProfile.construction.baseHighPerSqm = 4_000;
@@ -328,6 +331,9 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(thamesCoromandelDefault.construction_low).toBe(aucklandDefault.construction_low);
     expect(thamesCoromandelDefault.construction_high).toBe(aucklandDefault.construction_high);
     expect(thamesCoromandelDefault.cost_profile_id).toBe("thames-coromandel-default");
+    expect(bullerDefault.construction_low).toBe(aucklandDefault.construction_low);
+    expect(bullerDefault.construction_high).toBe(aucklandDefault.construction_high);
+    expect(bullerDefault.cost_profile_id).toBe("buller-default");
     expect(whangareiCustom.construction_low).toBeGreaterThan(whangareiDefault.construction_low);
     expect(regionalCostProfileForProvider("hamilton")).toMatchObject({ id: "hamilton-default", providerId: "hamilton" });
     expect(regionalCostProfileForProvider("waipa")).toMatchObject({
@@ -392,6 +398,11 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(regionalCostProfileForProvider("thames-coromandel")).toMatchObject({
       id: "thames-coromandel-default",
       providerId: "thames-coromandel",
+      source: "auckland_default_pending_regional_rates",
+    });
+    expect(regionalCostProfileForProvider("buller")).toMatchObject({
+      id: "buller-default",
+      providerId: "buller",
       source: "auckland_default_pending_regional_rates",
     });
     expect(regionalCostProfileForProvider("unsupported").id).toBe("unsupported-default");

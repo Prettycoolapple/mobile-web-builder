@@ -12,6 +12,7 @@ export type PlanningProviderId =
   | "matamata-piako"
   | "manawatu"
   | "thames-coromandel"
+  | "buller"
   | "selwyn"
   | "christchurch"
   | "canterbury"
@@ -186,6 +187,12 @@ const FEILDING_BOUNDS: Bounds = { minLat: -40.29, maxLat: -40.17, minLng: 175.49
 // neighbouring Hauraki District or Auckland properties.
 const THAMES_URBAN_BOUNDS: Bounds = { minLat: -37.25, maxLat: -37.02, minLng: 175.49, maxLng: 175.66 };
 const COROMANDEL_PENINSULA_BOUNDS: Bounds = { minLat: -37.35, maxLat: -36.42, minLng: 175.65, maxLng: 176.22 };
+// Buller District follows the northern West Coast and extends inland around
+// Reefton. Separate conservative settlement corridors avoid claiming Grey,
+// Westland or Tasman properties; rural addresses are resolved by district text.
+const BULLER_WESTPORT_BOUNDS: Bounds = { minLat: -41.92, maxLat: -41.55, minLng: 171.35, maxLng: 171.90 };
+const BULLER_NORTH_COAST_BOUNDS: Bounds = { minLat: -41.65, maxLat: -40.75, minLng: 171.10, maxLng: 172.05 };
+const BULLER_REEFTON_BOUNDS: Bounds = { minLat: -42.22, maxLat: -41.75, minLng: 171.70, maxLng: 172.25 };
 // Selwyn District wraps around Christchurch's western and southern edge. Use
 // conservative envelopes for its main urban growth settlements and rely on the
 // geocoder's "Selwyn District" address component for the remaining rural area.
@@ -294,6 +301,39 @@ const providerRegistry: PlanningProvider[] = [
         /(?:^|,\s*)tapu(?:\s+\d{4})?(?:,|$)/,
         /(?:^|,\s*)kopu(?:\s+\d{4})?(?:,|$)/,
       ]) || inBounds(context, THAMES_URBAN_BOUNDS) || inBounds(context, COROMANDEL_PENINSULA_BOUNDS),
+  ),
+  provider(
+    "buller",
+    "Buller District Council planning provider",
+    "Buller District Council",
+    "West Coast",
+    "full",
+    "Buller District Plan",
+    [
+      { label: "Buller Public Map Viewer", url: "https://experience.arcgis.com/experience/c51f1a7187d6482f82a04d7f0fbaeb60" },
+      { label: "Buller District Plan zones and controls", url: "https://services6.arcgis.com/Whb8vGWSmNkavSpL/arcgis/rest/services/BDC_Planning_Data_Public_View/FeatureServer" },
+      { label: "Buller public three waters", url: "https://www.arcgis.com/home/item.html?id=a9cd0780ea004b8aac4b928525c6fc72" },
+      { label: "Buller public property and valuations", url: "https://services6.arcgis.com/Whb8vGWSmNkavSpL/arcgis/rest/services/BDC_Property_Master_Public_View/FeatureServer" },
+    ],
+    (context) =>
+      addressHas(context, [
+        /\bbuller district\b/,
+        /(?:^|,\s*)westport(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)reefton(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)karamea(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)granity(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)ngakawau(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)hector(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)waimangaroa(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)seddonville(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)punakaiki(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)charleston(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)inangahua(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)little wanganui(?:\s+\d{4})?(?:,|$)/,
+      ])
+      || inBounds(context, BULLER_WESTPORT_BOUNDS)
+      || inBounds(context, BULLER_NORTH_COAST_BOUNDS)
+      || inBounds(context, BULLER_REEFTON_BOUNDS),
   ),
   provider(
     "auckland-legacy",

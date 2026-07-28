@@ -188,6 +188,8 @@ type TileRange = {
 const TILE_SIZE = 256;
 const MAX_AERIAL_TILES = 24;
 const AERIAL_TILE_CONTEXT_PAD = 1;
+const BULLER_PROPERTY =
+  "https://services6.arcgis.com/Whb8vGWSmNkavSpL/arcgis/rest/services/BDC_Property_Master_Public_View/FeatureServer";
 const NEIGHBOURHOOD_CONTEXT_PAD_M = 90;
 const NEIGHBOURHOOD_CONTEXT_MIN_SPAN_M = 300;
 const AUCKLAND_MANAGEMENT_LAYERS =
@@ -897,7 +899,7 @@ async function regionalPlanningOverlayLayers(
       // Whakatane's council ArcGIS host is consistently slower from Vercel
       // than from NZ clients. Match the planning lookup's provider-specific
       // allowance so applicable controls can reach the map layer response.
-      const timeoutMs = providerId === "whakatane" ? 20_000 : 9_000;
+      const timeoutMs = providerId === "whakatane" || providerId === "buller" ? 20_000 : 9_000;
       const primaryGeometry = def.geometryType === "polygon"
         ? pointGeometry
         : nearbyGeometry;
@@ -1081,6 +1083,7 @@ async function regionalServiceLayers(bounds: SitePlanBounds, providerId: Plannin
             layerId: layer.id,
             geometry: geometry.geometry,
             geometryType: geometry.geometryType,
+            where: layer.where,
             maxFeatures: denseTaurangaAssets ? 160 : 220,
             timeoutMs: 9000,
           });
@@ -1407,6 +1410,49 @@ async function resolveParcel(geo: GeoResult, cachedRaw?: RawPropertyData | null)
   });
 }
 
+async function resolveRegionalParcelFallback(
+  providerId: PlanningProviderId,
+  geo: GeoResult,
+): Promise<LinzParcel | null> {
+  if (providerId !== "buller") return null;
+  try {
+    const features = await queryArcGisFeatures({
+      serviceUrl: BULLER_PROPERTY,
+      layerId: 1,
+      geometry: `${geo.lng},${geo.lat}`,
+      geometryType: "esriGeometryPoint",
+      maxFeatures: 1,
+      timeoutMs: 12_000,
+    });
+    const feature = features[0];
+    const polygon = linesFromUnknown(feature?.geometry?.rings)[0];
+    if (!feature || !polygon || polygon.length < 3) return null;
+    const attrs = feature.attributes ?? {};
+    const lngs = polygon.map((position) => position[0]);
+    const lats = polygon.map((position) => position[1]);
+    const surveyArea = Number(attrs["SurveyArea"]);
+    return {
+      parcel_id: String(attrs["ParcelID"] ?? attrs["OBJECTID"] ?? "buller-parcel"),
+      appellation: String(attrs["Appellation"] ?? "").trim() || null,
+      area_sqm: Number.isFinite(surveyArea) && surveyArea > 0 ? Math.round(surveyArea) : null,
+      survey_area_sqm: Number.isFinite(surveyArea) && surveyArea > 0 ? Math.round(surveyArea) : null,
+      title_no: String(attrs["Titles"] ?? "").trim() || null,
+      legal_description: String(attrs["Appellation"] ?? "").trim() || null,
+      topology_type: "Primary",
+      bbox: {
+        minLng: Math.min(...lngs),
+        maxLng: Math.max(...lngs),
+        minLat: Math.min(...lats),
+        maxLat: Math.max(...lats),
+        polygon,
+      },
+    };
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "site-plan: Buller parcel fallback failed");
+    return null;
+  }
+}
+
 /**
  * Serves the planning/services/contours layer bundle from the durable cache
  * when available, otherwise runs the live external GIS fetch and populates
@@ -1480,7 +1526,8 @@ async function buildNationalSitePlanForGeo(
   cachedRaw?: RawPropertyData | null,
   providerId?: PlanningProviderId,
 ): Promise<SitePlanResponse> {
-  const parcel = await resolveParcel(geo, cachedRaw);
+  const parcel = await resolveParcel(geo, cachedRaw)
+    ?? await resolveRegionalParcelFallback(providerId ?? "unsupported", geo);
   const coreBounds = boundsFromParcel(parcel) ?? fallbackBoundsFromCenter(geo.lat, geo.lng);
   const mapBounds = sitePlanMapBounds(coreBounds);
   const center = parcel?.bbox ? boundsCenter(parcel.bbox) : { lat: geo.lat, lng: geo.lng };

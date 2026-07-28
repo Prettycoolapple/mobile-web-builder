@@ -43,6 +43,25 @@ describe("regional ArcGIS planning fetchers", () => {
     });
   });
 
+  it("maps Buller's published residential zone code and name", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/29/query")) {
+        return new Response(JSON.stringify({
+          features: [{ attributes: { OBJECTID: 7146, ZONING: "re", FULL_ZONE: "RESIDENTIAL ZONE", ZONE2: " " } }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ fields: [] }), { status: 200 });
+    }));
+
+    await expect(fetchRegionalPlanningZone(
+      jurisdiction("buller"), -41.76295052, 171.60663355,
+    )).resolves.toMatchObject({
+      zone_code: "re",
+      zone_description: expect.stringContaining("RESIDENTIAL ZONE"),
+    });
+  });
+
   it("maps Taupō District's published Environment zone field", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -618,6 +637,8 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(targets.some((target) => target.providerId === "selwyn" && target.kind === "zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "thames-coromandel" && target.kind === "zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "thames-coromandel" && target.label === "Flood Hazard")).toBe(true);
+    expect(targets.some((target) => target.providerId === "buller" && target.kind === "zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "buller" && target.label === "Westport Minimum Floor Level (NZVD2016)")).toBe(true);
     expect(targets.some((target) => target.providerId === "selwyn" && target.label === "Plains Flood Management Overlay")).toBe(true);
     expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Residential Zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Flood Hazard Zone")).toBe(true);

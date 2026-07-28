@@ -194,6 +194,10 @@ const MDC_GIS = "https://services9.arcgis.com/CzWZ8m5FuciqBibe/arcgis/rest/servi
 const mdcService = (name: string): string => `${MDC_GIS}/${name}/FeatureServer`;
 const TCDC_DISTRICT_PLAN =
   "https://services5.arcgis.com/MYtLmLEStmKgdmln/arcgis/rest/services/TCDC_Decisions_District_Plan/FeatureServer";
+const BULLER_DISTRICT_PLAN =
+  "https://services6.arcgis.com/Whb8vGWSmNkavSpL/arcgis/rest/services/BDC_Planning_Data_Public_View/FeatureServer";
+const WESTPORT_MINIMUM_FLOOR_LEVELS =
+  "https://services6.arcgis.com/Whb8vGWSmNkavSpL/arcgis/rest/services/Westport_Minimum_Floor_Level_Information_Values/FeatureServer";
 
 const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
   "thames-coromandel": {
@@ -231,6 +235,40 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
       overlay(TCDC_DISTRICT_PLAN, 27, "Flood Hazard", "polygon", "restricted", undefined, ["hazard_code", "hazard_type", "classification"]),
       overlay(TCDC_DISTRICT_PLAN, 29, "Natural Character", "polygon", "restricted", undefined, ["Natural_Character_Area", "Overlay", "Site_Name", "Rating"]),
     ],
+    maxConcurrentOverlayQueries: 4,
+  },
+  buller: {
+    zoneLayers: [
+      {
+        serviceUrl: BULLER_DISTRICT_PLAN,
+        layerId: 29,
+        label: "Buller District Plan Zone",
+        codeField: "ZONING",
+        nameFields: ["FULL_ZONE", "ZONING"],
+        detailFields: ["ZONE2"],
+        decodeCodedValues: false,
+      },
+    ],
+    overlayLayers: [
+      overlay(BULLER_DISTRICT_PLAN, 11, "Ngai Tahu Nohoanga Site", "point", "restricted", 25),
+      overlay(BULLER_DISTRICT_PLAN, 12, "Rifle Range Protection Area", "polygon", "restricted"),
+      overlay(BULLER_DISTRICT_PLAN, 13, "Ngai Tahu Statutory Acknowledgment", "polygon", "control"),
+      overlay(BULLER_DISTRICT_PLAN, 14, "Hydro Feature", "polygon", "restricted", undefined, ["FULL_ZONE"]),
+      overlay(BULLER_DISTRICT_PLAN, 18, "Historic Place", "point", "restricted", 25, ["REFNo", "CLASS_MAP", "DESCRIP"]),
+      overlay(BULLER_DISTRICT_PLAN, 19, "Historic Building or Structure", "point", "restricted", 25, ["REF_No", "ITEM", "LOCATION", "BUILD_DATE"]),
+      overlay(BULLER_DISTRICT_PLAN, 20, "Notable Tree", "point", "moderate", 25, ["REF", "SPECIES", "LOCATION"]),
+      overlay(BULLER_DISTRICT_PLAN, 21, "Coastal Hazard", "polyline", "restricted", 35),
+      overlay(BULLER_DISTRICT_PLAN, 22, "Rockfall Hazard", "polyline", "restricted", 35),
+      overlay(BULLER_DISTRICT_PLAN, 23, "Designation", "polygon", "control", undefined, ["DES_ID"]),
+      overlay(BULLER_DISTRICT_PLAN, 24, "Railway Designation", "polygon", "control", undefined, ["FULL_ZONE"]),
+      overlay(BULLER_DISTRICT_PLAN, 26, "Rural Airport Zone", "polygon", "restricted"),
+      overlay(BULLER_DISTRICT_PLAN, 27, "Zone Split Parcel", "polyline", "control", 25),
+      overlay(BULLER_DISTRICT_PLAN, 28, "Split Zone", "polygon", "control", undefined, ["FULL_ZONE"]),
+      overlay(BULLER_DISTRICT_PLAN, 31, "Bridge Zone", "polygon", "control", undefined, ["TYPE"]),
+      overlay(BULLER_DISTRICT_PLAN, 32, "New Port Zone", "polygon", "control", undefined, ["ZONING"]),
+      overlay(WESTPORT_MINIMUM_FLOOR_LEVELS, 0, "Westport Minimum Floor Level (NZVD2016)", "point", "restricted", 20, ["grid_code"]),
+    ],
+    queryTimeoutMs: 20_000,
     maxConcurrentOverlayQueries: 4,
   },
   selwyn: {

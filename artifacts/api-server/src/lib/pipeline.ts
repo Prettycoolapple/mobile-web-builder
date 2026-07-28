@@ -532,6 +532,8 @@ export function hasCacheableCore(r: PipelineResult): boolean {
         ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
       : providerId === "selwyn"
         ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
+      : providerId === "buller"
+        ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
       : providerId === "napier"
       ? ph?.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
       : providerId === "whakatane"

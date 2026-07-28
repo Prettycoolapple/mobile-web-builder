@@ -143,6 +143,7 @@ const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["provi
   "matamata-piako",
   "manawatu",
   "thames-coromandel",
+  "buller",
   "taupo",
   "rotorua",
   "whakatane",

@@ -25,6 +25,8 @@ const SELWYN_PROPERTY =
 const SELWYN_REVALUATION_YEAR = 2024;
 const TAUPO_RATEABLE_LAND =
   "https://maps.taupodc.govt.nz/server/rest/services/property/Rateable_Land_Parcel/FeatureServer/0";
+const BULLER_PROPERTY =
+  "https://services6.arcgis.com/Whb8vGWSmNkavSpL/arcgis/rest/services/BDC_Property_Master_Public_View/FeatureServer";
 
 type ArcGisFeature = { attributes?: Record<string, unknown> };
 
@@ -746,6 +748,79 @@ async function fetchSelwynPropertyHistory(
   }
 }
 
+async function fetchBullerPropertyHistory(
+  _address: string,
+  lat: number,
+  lng: number,
+  linzAreaSqm?: number | null,
+): Promise<PropertyHistory> {
+  try {
+    const parcelUrl = new URL(`${BULLER_PROPERTY}/1/query`);
+    parcelUrl.searchParams.set("f", "json");
+    parcelUrl.searchParams.set("where", "1=1");
+    parcelUrl.searchParams.set("geometry", `${lng},${lat}`);
+    parcelUrl.searchParams.set("geometryType", "esriGeometryPoint");
+    parcelUrl.searchParams.set("inSR", "4326");
+    parcelUrl.searchParams.set("spatialRel", "esriSpatialRelIntersects");
+    parcelUrl.searchParams.set("outFields", "OBJECTID,Appellation,Titles,SurveyArea,ValNum,ParcelID");
+    parcelUrl.searchParams.set("returnGeometry", "false");
+
+    const parcelResponse = await fetch(parcelUrl.toString(), { signal: AbortSignal.timeout(12_000) });
+    if (!parcelResponse.ok) throw new Error(`Buller property GIS HTTP ${parcelResponse.status}`);
+    const parcelData = await parcelResponse.json() as { features?: ArcGisFeature[]; error?: { message?: string } };
+    if (parcelData.error) throw new Error(`Buller property GIS error: ${parcelData.error.message ?? "unknown"}`);
+    const parcelAttrs = parcelData.features?.[0]?.attributes;
+    const objectId = positiveNumber(parcelAttrs?.["OBJECTID"]);
+    if (!parcelAttrs || objectId == null) return emptyPropertyHistory(linzAreaSqm);
+
+    const valuationUrl = new URL(`${BULLER_PROPERTY}/1/queryRelatedRecords`);
+    valuationUrl.searchParams.set("f", "json");
+    valuationUrl.searchParams.set("objectIds", String(objectId));
+    valuationUrl.searchParams.set("relationshipId", "1");
+    valuationUrl.searchParams.set("outFields", "*");
+    valuationUrl.searchParams.set("returnGeometry", "false");
+    const valuationResponse = await fetch(valuationUrl.toString(), { signal: AbortSignal.timeout(12_000) });
+    if (!valuationResponse.ok) throw new Error(`Buller valuation GIS HTTP ${valuationResponse.status}`);
+    const valuationData = await valuationResponse.json() as {
+      relatedRecordGroups?: Array<{ relatedRecords?: ArcGisFeature[] }>;
+      error?: { message?: string };
+    };
+    if (valuationData.error) throw new Error(`Buller valuation GIS error: ${valuationData.error.message ?? "unknown"}`);
+    const valuationAttrs = valuationData.relatedRecordGroups?.[0]?.relatedRecords?.[0]?.attributes;
+
+    const cvNzd = positiveNumber(valuationAttrs?.["CapitalValue"]);
+    const improvementValue = nonNegativeNumber(valuationAttrs?.["ImprovementsValue"]);
+    const valuationTimestamp = Number(valuationAttrs?.["ValuationDate"]);
+    const valuationYear = Number.isFinite(valuationTimestamp) && valuationTimestamp > 0
+      ? new Date(valuationTimestamp).getUTCFullYear()
+      : null;
+    const councilAreaSqm = positiveNumber(parcelAttrs["SurveyArea"]);
+    const landAreaSqm = linzAreaSqm ?? councilAreaSqm;
+    const propertyType = cvNzd != null && improvementValue === 0 ? "Vacant land / section" : null;
+
+    return {
+      cv_nzd: cvNzd,
+      cv_year: cvNzd ? valuationYear : null,
+      build_year: null,
+      floor_area_sqm: null,
+      land_area_sqm: landAreaSqm,
+      land_area_source: linzAreaSqm ? "linz" : "buller_council_property_gis",
+      land_area_scope: "parcel",
+      property_type: propertyType,
+      sources_confirmed: [
+        ...(cvNzd ? ["cv_nzd (Buller District Council rating valuation GIS)"] : []),
+        ...(landAreaSqm ? [linzAreaSqm
+          ? "land_area_sqm (from LINZ parcel)"
+          : "land_area_sqm (Buller District Council public parcel GIS)"] : []),
+        ...(propertyType ? ["property_type (Buller District Council zero improvement value)"] : []),
+      ],
+      sources_estimated: ["build_year", "floor_area_sqm", ...(propertyType ? [] : ["property_type"])],
+    };
+  } catch {
+    return emptyPropertyHistory(linzAreaSqm);
+  }
+}
+
 export async function fetchRegionalPropertyHistory(
   providerId: PlanningProviderId,
   address: string,
@@ -755,6 +830,7 @@ export async function fetchRegionalPropertyHistory(
 ): Promise<PropertyHistory> {
   if (providerId === "taupo") return fetchTaupoPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId === "selwyn") return fetchSelwynPropertyHistory(address, lat, lng, linzAreaSqm);
+  if (providerId === "buller") return fetchBullerPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId === "christchurch") return fetchChristchurchRatingUnit(address, linzAreaSqm);
   if (providerId === "manawatu") return fetchManawatuPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId === "southland") return fetchSouthlandPropertyHistory(address, lat, lng, linzAreaSqm);

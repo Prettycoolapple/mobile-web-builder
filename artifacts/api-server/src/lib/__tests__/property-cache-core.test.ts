@@ -240,6 +240,22 @@ describe("regional property-cache completeness", () => {
     } as never)).toBe(true);
   });
 
+  it("reacquires legacy unsupported Westport bundles and requires Buller council facts", () => {
+    expect(cachedRawNeedsRegionalZoneRefresh({
+      planning_provider: { providerId: "unsupported" },
+      geocode: {
+        lat: -41.76295052,
+        lng: 171.60663355,
+        formatted: "175 Romilly Street, Westport, Buller District, West Coast",
+      },
+      zone: { zone_code: "Residential" },
+    } as never)).toBe(true);
+    expect(cachedRawNeedsRegionalPropertyHistoryRefresh({
+      planning_provider: { providerId: "buller" },
+      property_history: { cv_nzd: null, land_area_sqm: null },
+    } as never)).toBe(true);
+  });
+
   it("reacquires legacy Kinloch bundles and caches a complete Taupō core", () => {
     expect(cachedRawNeedsRegionalZoneRefresh({
       planning_provider: { providerId: "unsupported" },

@@ -59,7 +59,7 @@ export function cachedRawNeedsRegionalZoneRefresh(rawData: RawPropertyData): boo
   // live Manawatu reacquisition after deployment.
   if (
     rawData.planning_provider?.providerId === "unsupported"
-    && (providerId === "manawatu" || providerId === "napier" || providerId === "tauranga" || providerId === "kapiti" || providerId === "selwyn" || providerId === "taupo" || providerId === "thames-coromandel")
+    && (providerId === "manawatu" || providerId === "napier" || providerId === "tauranga" || providerId === "kapiti" || providerId === "selwyn" || providerId === "taupo" || providerId === "thames-coromandel" || providerId === "buller")
   ) {
     return true;
   }
@@ -100,6 +100,9 @@ export function cachedRawNeedsRegionalPropertyHistoryRefresh(rawData: RawPropert
     return history?.cv_nzd == null || history.land_area_sqm == null;
   }
   if (providerId === "selwyn") {
+    return history?.cv_nzd == null || history.land_area_sqm == null;
+  }
+  if (providerId === "buller") {
     return history?.cv_nzd == null || history.land_area_sqm == null;
   }
   if (providerId === "manawatu" && /\b(?:palmerston north|ashhurst|longburn)\b/i.test(rawData.geocode?.formatted ?? "")) {

@@ -31,6 +31,7 @@ describe("regional planning provider registry", () => {
   it("registers Auckland legacy plus WIP regional providers", () => {
     expect(allPlanningProviders().map((provider) => provider.id)).toEqual([
       "thames-coromandel",
+      "buller",
       "auckland-legacy",
       "hamilton",
       "matamata-piako",
@@ -68,6 +69,7 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: -40.356, lng: 175.611, address: "Palmerston North" }).providerId).toBe("manawatu");
     expect(resolvePlanningJurisdiction({ lat: -40.225, lng: 175.565, address: "Feilding" }).providerId).toBe("manawatu");
     expect(resolvePlanningJurisdiction({ lat: -37.14783098, lng: 175.55078515, address: "111 Rolleston Street, Thames" }).providerId).toBe("thames-coromandel");
+    expect(resolvePlanningJurisdiction({ lat: -41.76295052, lng: 171.60663355, address: "175 Romilly Street, Westport" }).providerId).toBe("buller");
     for (const address of [
       "54 Manawatu Street, Palmerston North",
       "Cambridge Avenue, Ashhurst",
@@ -86,6 +88,7 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: -43.532, lng: 172.636, address: "Christchurch" }).providerId).toBe("christchurch");
     expect(resolvePlanningJurisdiction({ lat: -43.5929461, lng: 172.5104991, address: "100 Birchs Road, Prebbleton, Selwyn District" }).providerId).toBe("selwyn");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "111 Rolleston Street, Thames" }).providerId).toBe("thames-coromandel");
+    expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "175 Romilly Street, Westport, Buller District" }).providerId).toBe("buller");
     expect(resolvePlanningJurisdiction({ lat: -44.397, lng: 171.254, address: "Timaru" }).providerId).toBe("canterbury");
     expect(resolvePlanningJurisdiction({ lat: -41.306, lng: 173.222, address: "17 Quiet Woman Way, Monaco, Nelson" }).providerId).toBe("nelson");
     expect(resolvePlanningJurisdiction({ lat: -35.725, lng: 174.323, address: "Whangarei" }).providerId).toBe("whangarei");
@@ -160,6 +163,7 @@ describe("regional planning provider registry", () => {
     const providerIds = new Set(planningProviderSmokeTargets().map((target) => target.providerId));
     expect(providerIds).toEqual(new Set([
       "thames-coromandel",
+      "buller",
       "auckland-legacy",
       "hamilton",
       "matamata-piako",

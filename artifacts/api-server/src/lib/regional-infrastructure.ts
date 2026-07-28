@@ -13,6 +13,7 @@ type RegionalServiceName = "Wastewater" | "Stormwater" | "Water Supply";
 export interface RegionalInfrastructureLayer {
   id: number;
   label: string;
+  where?: string;
 }
 
 export interface RegionalInfrastructureGroup {
@@ -118,6 +119,12 @@ const PNCC_GIS = "https://services.arcgis.com/Fv0Tvc98QEDvQyjL/arcgis/rest/servi
 const MDC_GIS = "https://services9.arcgis.com/CzWZ8m5FuciqBibe/arcgis/rest/services";
 const TCDC_THREE_WATERS =
   "https://services5.arcgis.com/MYtLmLEStmKgdmln/arcgis/rest/services/TCDC_3Waters/FeatureServer";
+const BULLER_WATER =
+  "https://services6.arcgis.com/Whb8vGWSmNkavSpL/arcgis/rest/services/Water_Supply_Services_Public_View/FeatureServer";
+const BULLER_WASTEWATER =
+  "https://services6.arcgis.com/Whb8vGWSmNkavSpL/arcgis/rest/services/Sewer_Services_Public_View/FeatureServer";
+const BULLER_STORMWATER =
+  "https://services6.arcgis.com/Whb8vGWSmNkavSpL/arcgis/rest/services/Stormwater_Services_Public_View/FeatureServer";
 
 const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfrastructureGroup[]>> = {
   "thames-coromandel": [
@@ -132,6 +139,20 @@ const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfras
     group("Stormwater", TCDC_THREE_WATERS, "Thames-Coromandel District Council", [
       [3, "Stormwater point or connection"],
       [6, "Stormwater line"],
+    ], 1000),
+  ],
+  buller: [
+    group("Water Supply", BULLER_WATER, "Buller District Council", [
+      [0, "Public potable-water point or connection", "ASSET_OWNER = 'Local Authority'"],
+      [2, "Public potable-water line", "ASSET_OWNER = 'Local Authority'"],
+    ]),
+    group("Wastewater", BULLER_WASTEWATER, "Buller District Council", [
+      [0, "Public wastewater point or connection", "ASSET_OWNER = 'Local Authority'"],
+      [2, "Public wastewater line", "ASSET_OWNER = 'Local Authority'"],
+    ]),
+    group("Stormwater", BULLER_STORMWATER, "Buller District Council", [
+      [0, "Public stormwater point or connection", "ASSET_OWNER = 'Local Authority'"],
+      [2, "Public stormwater line", "ASSET_OWNER = 'Local Authority'"],
     ], 1000),
   ],
   selwyn: [
@@ -440,7 +461,7 @@ function group(
   name: RegionalServiceName,
   serviceUrl: string,
   owner: string,
-  layers: Array<[number, string]>,
+  layers: Array<[number, string, string?]>,
   ruralSearchDistanceM = 500,
 ): RegionalInfrastructureGroup {
   return {
@@ -449,7 +470,7 @@ function group(
     owner,
     maintainer: owner,
     ruralSearchDistanceM,
-    layers: layers.map(([id, label]) => ({ id, label })),
+    layers: layers.map(([id, label, where]) => ({ id, label, where })),
   };
 }
 
@@ -488,7 +509,7 @@ async function queryRegionalInfrastructureLayer(
   url.searchParams.set("inSR", "4326");
   url.searchParams.set("outSR", "4326");
   url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
-  url.searchParams.set("where", "1=1");
+  url.searchParams.set("where", layer.where ?? "1=1");
   url.searchParams.set("outFields", "*");
   url.searchParams.set("returnGeometry", "true");
   url.searchParams.set("returnDistinctValues", "false");

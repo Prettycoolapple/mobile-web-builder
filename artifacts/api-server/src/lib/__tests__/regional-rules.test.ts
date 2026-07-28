@@ -8,6 +8,20 @@ import {
 } from "../regional-rules";
 
 describe("regional planning rule status", () => {
+  it("enables Buller interim ROI and scoring without inventing subdivision yield", () => {
+    expect(regionalPlanningRuleStatus(
+      { providerId: "buller", providerName: "Buller District Council planning provider" },
+      { zone_code: "re", zone_description: "RESIDENTIAL ZONE", min_lot_size_sqm: null, raw_zone: "{}" },
+      1_012,
+    )).toMatchObject({
+      subdivisionRules: "not_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: false,
+      automaticRoiAllowed: true,
+      verifiedMinimumLotSqm: null,
+    });
+  });
+
   it("models PNCC and MDC residential subdivision rules with ROI enabled", () => {
     const provider = { providerId: "manawatu" as const, providerName: "Manawatu planning provider" };
     const pnccZone = {

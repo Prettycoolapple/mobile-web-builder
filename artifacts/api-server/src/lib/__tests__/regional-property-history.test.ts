@@ -54,6 +54,46 @@ describe("regional property history", () => {
     });
   });
 
+  it("returns Buller's parcel area and related council valuation for 175 Romilly Street", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("queryRelatedRecords")) {
+        return new Response(JSON.stringify({
+          relatedRecordGroups: [{
+            objectId: 16765,
+            relatedRecords: [{ attributes: {
+              OBJECTID: 3232,
+              LandValue: 130_000,
+              CapitalValue: 350_000,
+              ValuationDate: 1_756_684_800_000,
+              ImprovementsValue: 220_000,
+            } }],
+          }],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        features: [{ attributes: {
+          OBJECTID: 16765,
+          Appellation: "Lot 2 DP 4334",
+          Titles: "NL43/96",
+          SurveyArea: 1_012,
+          ValNum: "1896029500",
+          ParcelID: 3_596_659,
+        } }],
+      }), { status: 200 });
+    }));
+
+    await expect(fetchRegionalPropertyHistory(
+      "buller", "175 Romilly Street, Westport", -41.76295052, 171.60663355,
+    )).resolves.toMatchObject({
+      cv_nzd: 350_000,
+      cv_year: 2025,
+      land_area_sqm: 1_012,
+      land_area_source: "buller_council_property_gis",
+      land_area_scope: "parcel",
+    });
+  });
+
   it("returns Christchurch's complete exact-address rating unit for a multi-parcel property", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));

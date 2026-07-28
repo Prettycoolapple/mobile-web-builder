@@ -671,6 +671,66 @@ describe("regional site-plan wrapper", () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/TCDC_3Waters/FeatureServer/6/query"))).toBe(true);
   });
 
+  it("shows Buller public services, floor-level control, and council parcel at 175 Romilly Street", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/BDC_Property_Master_Public_View/FeatureServer/1/query")) {
+        return new Response(JSON.stringify({
+          features: [{
+            attributes: {
+              OBJECTID: 16765,
+              Appellation: "Lot 2 DP 4334",
+              Titles: "NL43/96",
+              SurveyArea: 1_012,
+              ParcelID: 3_596_659,
+            },
+            geometry: { rings: [[
+              [171.60635, -41.76320], [171.60695, -41.76320], [171.60695, -41.76265],
+              [171.60635, -41.76265], [171.60635, -41.76320],
+            ]] },
+          }],
+        }), { status: 200 });
+      }
+      const isService = url.includes("/Water_Supply_Services_Public_View/FeatureServer/")
+        || url.includes("/Sewer_Services_Public_View/FeatureServer/")
+        || url.includes("/Stormwater_Services_Public_View/FeatureServer/");
+      const isFloorLevel = url.includes("/Westport_Minimum_Floor_Level_Information_Values/FeatureServer/0/query");
+      const features = isService ? [{
+        attributes: { OBJECTID: 1, ASSET_OWNER: "Local Authority" },
+        geometry: { paths: [[[171.6064, -41.7630], [171.6070, -41.7630]]] },
+      }] : isFloorLevel ? [{
+        attributes: { OBJECTID: 2370821, grid_code: 5.4981 },
+        geometry: { x: 171.60661, y: -41.76296 },
+      }] : [];
+      return new Response(JSON.stringify({ features, fields: [] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sitePlan = await buildSitePlanForReport("175 Romilly Street, Westport", {
+      geocode: {
+        lat: -41.76295052,
+        lng: 171.60663355,
+        formatted: "175 Romilly Street, Westport, Buller District, West Coast",
+        suburb: "Westport",
+      },
+      linz_parcel: null,
+    } as RawPropertyData);
+
+    expect(sitePlan.layers.find((layer) => layer.id === "boundary")).toMatchObject({
+      available: true,
+      defaultVisible: true,
+    });
+    expect(sitePlan.layers.filter((layer) => layer.group === "services" && layer.available).map((layer) => layer.label).sort())
+      .toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(sitePlan.layers.find((layer) => layer.label === "Westport Minimum Floor Level (NZVD2016)"))
+      .toMatchObject({ group: "planning", available: true });
+    const serviceRequests = fetchMock.mock.calls
+      .map((call) => new URL(String(call[0])))
+      .filter((url) => /(?:Water_Supply|Sewer|Stormwater)_Services_Public_View/.test(url.pathname));
+    expect(serviceRequests.length).toBeGreaterThan(0);
+    expect(serviceRequests.every((url) => url.searchParams.get("where") === "ASSET_OWNER = 'Local Authority'")).toBe(true);
+  });
+
   it("returns thin, subtle contours for a phone-sized aerial", async () => {
     process.env["LINZ_API_KEY"] = "test-linz-key";
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
