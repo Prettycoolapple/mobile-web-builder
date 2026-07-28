@@ -616,6 +616,61 @@ describe("regional site-plan wrapper", () => {
       .toBeGreaterThanOrEqual(1_000);
   });
 
+  it("shows TCDC public services and applicable controls at 111 Rolleston Street", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isService = url.includes("/TCDC_3Waters/FeatureServer/");
+      const isCoastal = url.includes("/TCDC_Decisions_District_Plan/FeatureServer/14/query");
+      const isFlood = url.includes("/TCDC_Decisions_District_Plan/FeatureServer/27/query");
+      const features = isService ? [{
+        attributes: { OBJECTID: 1, Status: "IN SERVICE", AssetOwner: "TCDC" },
+        geometry: { paths: [[[175.5504, -37.1480], [175.5511, -37.1480]]] },
+      }] : isCoastal || isFlood ? [{
+        attributes: isCoastal
+          ? { label: "Coastal Environment", name: "Coastal Environment Line 2020" }
+          : { hazard_code: "FHAD", hazard_type: "Defended", classification: "Defended Area" },
+        geometry: { rings: [[
+          [175.5502, -37.1482], [175.5512, -37.1482], [175.5512, -37.1474],
+          [175.5502, -37.1474], [175.5502, -37.1482],
+        ]] },
+      }] : [];
+      return new Response(JSON.stringify({ features, fields: [] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sitePlan = await buildSitePlanForReport("111 Rolleston Street, Thames", {
+      geocode: {
+        lat: -37.14783098,
+        lng: 175.55078515,
+        formatted: "111 Rolleston Street, Thames, Waikato",
+        suburb: "Thames",
+      },
+      linz_parcel: {
+        parcel_id: "thames-111",
+        appellation: "Lot 1",
+        area_sqm: 1_012,
+        title_no: "test",
+        legal_description: "Lot 1",
+        topology_type: "Primary",
+        bbox: {
+          minLng: 175.55045, maxLng: 175.55105, minLat: -37.14810, maxLat: -37.14755,
+          polygon: [
+            [175.55045, -37.14810], [175.55105, -37.14810], [175.55105, -37.14755],
+            [175.55045, -37.14755], [175.55045, -37.14810],
+          ],
+        },
+      },
+    } as RawPropertyData);
+
+    expect(sitePlan.layers.filter((layer) => layer.group === "services" && layer.available).map((layer) => layer.label).sort())
+      .toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available).map((layer) => layer.label))
+      .toEqual(expect.arrayContaining(["Coastal Environment", "Flood Hazard"]));
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/TCDC_3Waters/FeatureServer/4/query"))).toBe(true);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/TCDC_3Waters/FeatureServer/5/query"))).toBe(true);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/TCDC_3Waters/FeatureServer/6/query"))).toBe(true);
+  });
+
   it("returns thin, subtle contours for a phone-sized aerial", async () => {
     process.env["LINZ_API_KEY"] = "test-linz-key";
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {

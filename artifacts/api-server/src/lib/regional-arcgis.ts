@@ -192,8 +192,47 @@ const PNCC_GIS = "https://services.arcgis.com/Fv0Tvc98QEDvQyjL/arcgis/rest/servi
 const pnccService = (name: string): string => `${PNCC_GIS}/${name}/FeatureServer`;
 const MDC_GIS = "https://services9.arcgis.com/CzWZ8m5FuciqBibe/arcgis/rest/services";
 const mdcService = (name: string): string => `${MDC_GIS}/${name}/FeatureServer`;
+const TCDC_DISTRICT_PLAN =
+  "https://services5.arcgis.com/MYtLmLEStmKgdmln/arcgis/rest/services/TCDC_Decisions_District_Plan/FeatureServer";
 
 const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
+  "thames-coromandel": {
+    zoneLayers: [
+      {
+        serviceUrl: TCDC_DISTRICT_PLAN,
+        layerId: 28,
+        label: "Thames-Coromandel District Plan Zone",
+        codeField: "ZONE_CODE",
+        nameFields: ["ZONE", "ZONE_CODE"],
+        decodeCodedValues: false,
+      },
+    ],
+    overlayLayers: [
+      overlay(TCDC_DISTRICT_PLAN, 3, "Significant Tree", "point", "moderate", 25, ["label", "species", "location"]),
+      overlay(TCDC_DISTRICT_PLAN, 4, "Archaeological Site", "point", "restricted", 25, ["label", "item_number", "nzaa_id"]),
+      overlay(TCDC_DISTRICT_PLAN, 5, "Site of Significance to Maori", "point", "restricted", 25, ["label", "cultural_site_name", "location"]),
+      overlay(TCDC_DISTRICT_PLAN, 6, "Historic Heritage Item", "point", "restricted", 25, ["label", "item_name", "location1"]),
+      overlay(TCDC_DISTRICT_PLAN, 7, "Quarry", "point", "restricted", 50, ["label", "quarry_name", "location"]),
+      overlay(TCDC_DISTRICT_PLAN, 8, "National Grid", "polyline", "restricted", 35, ["label", "asset_name", "line_type"]),
+      overlay(TCDC_DISTRICT_PLAN, 9, "Current Coastal Erosion Line", "polyline", "restricted", 35, ["label", "location", "setback_di"]),
+      overlay(TCDC_DISTRICT_PLAN, 10, "Future Coastal Process Line", "polyline", "restricted", 35, ["label", "location", "setback_distance"]),
+      overlay(TCDC_DISTRICT_PLAN, 11, "Beachfront Yard", "polyline", "restricted", 25, ["label", "town_name", "description"]),
+      overlay(TCDC_DISTRICT_PLAN, 13, "Archaeological Sites", "polygon", "restricted", undefined, ["label", "item_number", "nzaa_id"]),
+      overlay(TCDC_DISTRICT_PLAN, 14, "Coastal Environment", "polygon", "control", undefined, ["label", "name", "description"]),
+      overlay(TCDC_DISTRICT_PLAN, 15, "Site Specific Activity", "polygon", "control", undefined, ["label", "ssa_no", "name"]),
+      overlay(TCDC_DISTRICT_PLAN, 16, "Designation", "polygon", "control", undefined, ["label", "desig_authority", "desig_item"]),
+      overlay(TCDC_DISTRICT_PLAN, 17, "Beach Amenity", "polygon", "control", undefined, ["label", "town_name", "description"]),
+      overlay(TCDC_DISTRICT_PLAN, 18, "Historic Heritage Area", "polygon", "restricted", undefined, ["label", "heritage_area", "location"]),
+      overlay(TCDC_DISTRICT_PLAN, 19, "Historic Heritage Curtilage", "polygon", "restricted", undefined, ["label", "item_name", "location1"]),
+      overlay(TCDC_DISTRICT_PLAN, 20, "Site Development Plan", "polygon", "control", undefined, ["label", "sdp_name", "location"]),
+      overlay(TCDC_DISTRICT_PLAN, 21, "Structure Plan", "polygon", "control", undefined, ["label", "structure_name", "location"]),
+      overlay(TCDC_DISTRICT_PLAN, 22, "Residual Risk Area", "polygon", "restricted", undefined, ["label", "name", "location"]),
+      overlay(TCDC_DISTRICT_PLAN, 26, "Outstanding Natural Feature or Landscape", "polygon", "restricted", undefined, ["label", "name", "class"]),
+      overlay(TCDC_DISTRICT_PLAN, 27, "Flood Hazard", "polygon", "restricted", undefined, ["hazard_code", "hazard_type", "classification"]),
+      overlay(TCDC_DISTRICT_PLAN, 29, "Natural Character", "polygon", "restricted", undefined, ["Natural_Character_Area", "Overlay", "Site_Name", "Rating"]),
+    ],
+    maxConcurrentOverlayQueries: 4,
+  },
   selwyn: {
     zoneLayers: [
       {

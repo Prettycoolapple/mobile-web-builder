@@ -11,6 +11,7 @@ export type PlanningProviderId =
   | "waipa"
   | "matamata-piako"
   | "manawatu"
+  | "thames-coromandel"
   | "selwyn"
   | "christchurch"
   | "canterbury"
@@ -180,6 +181,11 @@ const MATAMATA_PIAKO_BOUNDS: Bounds = { minLat: -37.86, maxLat: -37.28, minLng: 
 // settlement text returned by the geocoder.
 const PALMERSTON_NORTH_BOUNDS: Bounds = { minLat: -40.43, maxLat: -40.25, minLng: 175.50, maxLng: 175.83 };
 const FEILDING_BOUNDS: Bounds = { minLat: -40.29, maxLat: -40.17, minLng: 175.49, maxLng: 175.65 };
+// Thames-Coromandel is an irregular peninsula district. Keep Thames and the
+// peninsula in separate conservative envelopes so the provider does not claim
+// neighbouring Hauraki District or Auckland properties.
+const THAMES_URBAN_BOUNDS: Bounds = { minLat: -37.25, maxLat: -37.02, minLng: 175.49, maxLng: 175.66 };
+const COROMANDEL_PENINSULA_BOUNDS: Bounds = { minLat: -37.35, maxLat: -36.42, minLng: 175.65, maxLng: 176.22 };
 // Selwyn District wraps around Christchurch's western and southern edge. Use
 // conservative envelopes for its main urban growth settlements and rely on the
 // geocoder's "Selwyn District" address component for the remaining rural area.
@@ -258,6 +264,37 @@ function supportsSouthlandDistrict(context: PlanningProviderContext): boolean {
 }
 
 const providerRegistry: PlanningProvider[] = [
+  provider(
+    "thames-coromandel",
+    "Thames-Coromandel District Council planning provider",
+    "Thames-Coromandel District Council",
+    "Waikato",
+    "full",
+    "Thames-Coromandel District Plan",
+    [
+      { label: "TCDC District Plan zones and controls", url: "https://services5.arcgis.com/MYtLmLEStmKgdmln/arcgis/rest/services/TCDC_Decisions_District_Plan/FeatureServer" },
+      { label: "TCDC public three waters", url: "https://services5.arcgis.com/MYtLmLEStmKgdmln/arcgis/rest/services/TCDC_3Waters/FeatureServer" },
+      { label: "TCDC property information", url: "https://services5.arcgis.com/MYtLmLEStmKgdmln/arcgis/rest/services/Property_Information/FeatureServer" },
+    ],
+    (context) =>
+      addressHas(context, [
+        /\bthames-coromandel district\b/,
+        /(?:^|,\s*)thames(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)coromandel(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)whitianga(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)whangamata(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)tairua(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)pauanui(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)hahei(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)matarangi(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)cooks beach(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)whangapoua(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)waiomu(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)te puru(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)tapu(?:\s+\d{4})?(?:,|$)/,
+        /(?:^|,\s*)kopu(?:\s+\d{4})?(?:,|$)/,
+      ]) || inBounds(context, THAMES_URBAN_BOUNDS) || inBounds(context, COROMANDEL_PENINSULA_BOUNDS),
+  ),
   provider(
     "auckland-legacy",
     "Auckland Council legacy GIS",
@@ -419,7 +456,7 @@ const providerRegistry: PlanningProvider[] = [
       addressHas(context, [
         /\bselwyn district\b/,
         /\bprebbleton\b/,
-        /\brolleston\b/,
+        /,\s*rolleston(?:\s+\d{4})?(?:,|$)/,
         /\blincoln\b/,
         /\bwest melton\b/,
         /\bdarfield\b/,

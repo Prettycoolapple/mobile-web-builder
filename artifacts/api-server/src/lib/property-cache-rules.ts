@@ -33,7 +33,7 @@ export function cachedPlanningProviderId(rawData: RawPropertyData): PlanningProv
   // zoning, rating and three-waters data after deployment.
   // Selwyn was previously swallowed by the broad Christchurch/Canterbury
   // providers. Re-resolve those legacy rows as well as Kāpiti/Wellington rows.
-  if (explicit && explicit !== "unsupported" && explicit !== "wellington" && explicit !== "christchurch" && explicit !== "canterbury") return explicit;
+  if (explicit && explicit !== "unsupported" && explicit !== "wellington" && explicit !== "christchurch" && explicit !== "canterbury" && explicit !== "selwyn") return explicit;
   const lat = rawData.geocode?.lat;
   const lng = rawData.geocode?.lng;
   if (typeof lat !== "number" || typeof lng !== "number") return explicit ?? null;
@@ -59,7 +59,7 @@ export function cachedRawNeedsRegionalZoneRefresh(rawData: RawPropertyData): boo
   // live Manawatu reacquisition after deployment.
   if (
     rawData.planning_provider?.providerId === "unsupported"
-    && (providerId === "manawatu" || providerId === "napier" || providerId === "tauranga" || providerId === "kapiti" || providerId === "selwyn" || providerId === "taupo")
+    && (providerId === "manawatu" || providerId === "napier" || providerId === "tauranga" || providerId === "kapiti" || providerId === "selwyn" || providerId === "taupo" || providerId === "thames-coromandel")
   ) {
     return true;
   }
@@ -68,6 +68,7 @@ export function cachedRawNeedsRegionalZoneRefresh(rawData: RawPropertyData): boo
     (rawData.planning_provider?.providerId === "christchurch" || rawData.planning_provider?.providerId === "canterbury")
     && providerId === "selwyn"
   ) return true;
+  if (rawData.planning_provider?.providerId === "selwyn" && providerId === "thames-coromandel") return true;
   const zoneCode = rawData.zone?.zone_code?.trim().toLowerCase();
   return !zoneCode || zoneCode === "unknown" || zoneCode === "unknown zone" || zoneCode === "regional";
 }

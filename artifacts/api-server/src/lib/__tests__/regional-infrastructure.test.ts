@@ -105,6 +105,24 @@ describe("regional infrastructure fetchers", () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/External_ThreeWaters_Layers_v2/MapServer/14/query"))).toBe(true);
   });
 
+  it("maps all three Thames-Coromandel public utility groups", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const mapped = ["/1/query", "/2/query", "/3/query", "/4/query", "/5/query", "/6/query"]
+        .some((path) => url.includes(path));
+      return new Response(JSON.stringify({
+        features: mapped ? [{
+          attributes: { OBJECTID: 1, AssetOwner: "TCDC" },
+          geometry: { paths: [[[175.5507, -37.1478], [175.5510, -37.1478]]] },
+        }] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const result = await fetchRegionalInfrastructure("thames-coromandel", -37.14783098, 175.55078515, null);
+    expect(result.map((item) => item.name).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(result.every((item) => item.service_source_owner === "Thames-Coromandel District Council")).toBe(true);
+  });
+
   it("returns Taupō District's three public pipe services for Kinloch", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       features: [{
@@ -311,6 +329,7 @@ describe("regional infrastructure fetchers", () => {
     expect(hasRegionalInfrastructureProvider("kapiti")).toBe(true);
     expect(hasRegionalInfrastructureProvider("selwyn")).toBe(true);
     expect(hasRegionalInfrastructureProvider("matamata-piako")).toBe(true);
+    expect(hasRegionalInfrastructureProvider("thames-coromandel")).toBe(true);
 
     const targets = regionalInfrastructureSmokeTargets();
     expect(targets.some((target) => target.providerId === "hamilton" && target.serviceName === "Water Supply")).toBe(true);
@@ -331,5 +350,6 @@ describe("regional infrastructure fetchers", () => {
     expect(targets.some((target) => target.providerId === "selwyn" && target.label === "Water supply pipe")).toBe(true);
     expect(targets.some((target) => target.providerId === "matamata-piako" && target.serviceName === "Stormwater")).toBe(true);
     expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Stormwater main")).toBe(true);
+    expect(targets.some((target) => target.providerId === "thames-coromandel" && target.label === "Potable water supply line")).toBe(true);
   });
 });

@@ -116,8 +116,24 @@ const MPDC_STORMWATER =
   "https://services6.arcgis.com/EU3vB12T67eDdisL/arcgis/rest/services/StormWaterLine/FeatureServer";
 const PNCC_GIS = "https://services.arcgis.com/Fv0Tvc98QEDvQyjL/arcgis/rest/services";
 const MDC_GIS = "https://services9.arcgis.com/CzWZ8m5FuciqBibe/arcgis/rest/services";
+const TCDC_THREE_WATERS =
+  "https://services5.arcgis.com/MYtLmLEStmKgdmln/arcgis/rest/services/TCDC_3Waters/FeatureServer";
 
 const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfrastructureGroup[]>> = {
+  "thames-coromandel": [
+    group("Water Supply", TCDC_THREE_WATERS, "Thames-Coromandel District Council", [
+      [1, "Potable water point or connection"],
+      [4, "Potable water supply line"],
+    ]),
+    group("Wastewater", TCDC_THREE_WATERS, "Thames-Coromandel District Council", [
+      [2, "Wastewater point or connection"],
+      [5, "Wastewater line"],
+    ]),
+    group("Stormwater", TCDC_THREE_WATERS, "Thames-Coromandel District Council", [
+      [3, "Stormwater point or connection"],
+      [6, "Stormwater line"],
+    ], 1000),
+  ],
   selwyn: [
     group("Water Supply", SELWYN_WATER, "Selwyn Water Limited", [
       [3, "Water point or connection"],

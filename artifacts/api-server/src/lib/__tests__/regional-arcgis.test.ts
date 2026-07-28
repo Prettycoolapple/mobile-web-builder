@@ -24,6 +24,25 @@ describe("regional ArcGIS planning fetchers", () => {
     vi.unstubAllGlobals();
   });
 
+  it("maps the published Thames-Coromandel zone code and name", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/28/query")) {
+        return new Response(JSON.stringify({
+          features: [{ attributes: { OBJECTID: 56124, ZONE_CODE: "EDRZ", ZONE: "Extra Density Residential Zone" } }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ fields: [] }), { status: 200 });
+    }));
+
+    await expect(fetchRegionalPlanningZone(
+      jurisdiction("thames-coromandel"), -37.14783098, 175.55078515,
+    )).resolves.toMatchObject({
+      zone_code: "EDRZ",
+      zone_description: expect.stringContaining("Extra Density Residential Zone"),
+    });
+  });
+
   it("maps Taupō District's published Environment zone field", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -597,6 +616,8 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(targets.some((target) => target.providerId === "kapiti" && target.kind === "zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "kapiti" && target.label === "Ponding Area")).toBe(true);
     expect(targets.some((target) => target.providerId === "selwyn" && target.kind === "zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "thames-coromandel" && target.kind === "zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "thames-coromandel" && target.label === "Flood Hazard")).toBe(true);
     expect(targets.some((target) => target.providerId === "selwyn" && target.label === "Plains Flood Management Overlay")).toBe(true);
     expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Residential Zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Flood Hazard Zone")).toBe(true);

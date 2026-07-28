@@ -6,6 +6,7 @@ export type CostProfileId =
   | "waipa-default"
   | "matamata-piako-default"
   | "manawatu-default"
+  | "thames-coromandel-default"
   | "selwyn-default"
   | "christchurch-default"
   | "canterbury-default"
@@ -214,6 +215,9 @@ const REGIONAL_COST_OVERRIDES: Partial<Record<PlanningProviderId, DeepPartial<Re
   // Seeded from Auckland by request. Tune Manawatu construction,
   // contributions and rates here without changing the Auckland baseline.
   manawatu: {},
+  // Seeded from Auckland by request. Tune Thames-Coromandel construction,
+  // three-waters connections, contributions and rates independently here.
+  "thames-coromandel": {},
   // Seeded from Auckland by request. Tune Selwyn build, Selwyn Water
   // connection/development contributions and council-rate inputs here later.
   selwyn: {},
@@ -253,6 +257,7 @@ const PROVIDER_PROFILE_META: Record<PlanningProviderId, { id: CostProfileId; lab
   waipa: { id: "waipa-default", label: "Waipā default cost profile (Auckland assumptions)" },
   "matamata-piako": { id: "matamata-piako-default", label: "Matamata-Piako default cost profile (Auckland assumptions)" },
   manawatu: { id: "manawatu-default", label: "Manawatu default cost profile (Auckland assumptions)" },
+  "thames-coromandel": { id: "thames-coromandel-default", label: "Thames-Coromandel default cost profile (Auckland assumptions)" },
   selwyn: { id: "selwyn-default", label: "Selwyn District default cost profile (Auckland assumptions)" },
   christchurch: { id: "christchurch-default", label: "Christchurch default cost profile" },
   canterbury: { id: "canterbury-default", label: "Canterbury default cost profile" },

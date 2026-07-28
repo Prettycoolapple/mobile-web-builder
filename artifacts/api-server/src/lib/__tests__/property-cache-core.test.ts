@@ -228,6 +228,18 @@ describe("regional property-cache completeness", () => {
     } as never)).toBe(true);
   });
 
+  it("migrates Rolleston Street Thames rows that were misrouted to Selwyn", () => {
+    expect(cachedRawNeedsRegionalZoneRefresh({
+      planning_provider: { providerId: "selwyn" },
+      geocode: {
+        lat: -37.14783098,
+        lng: 175.55078515,
+        formatted: "111 Rolleston Street, Thames, Waikato",
+      },
+      zone: { zone_code: "Residential" },
+    } as never)).toBe(true);
+  });
+
   it("reacquires legacy Kinloch bundles and caches a complete Taupō core", () => {
     expect(cachedRawNeedsRegionalZoneRefresh({
       planning_provider: { providerId: "unsupported" },
