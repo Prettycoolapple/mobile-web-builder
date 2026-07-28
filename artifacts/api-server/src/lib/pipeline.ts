@@ -126,6 +126,13 @@ function browserScrapersEnabled(): boolean {
   return true;
 }
 
+export function hasRoomCountConflict(values: Array<number | null | undefined>): boolean {
+  const usable = values.filter(
+    (value): value is number => value != null && Number.isFinite(value) && value > 0,
+  );
+  return new Set(usable).size > 1;
+}
+
 /**
  * Parse a build decade string or year from AC GIS.
  * AC GIS returns "DECADEBUILT" as values like 2010, 1990, "2010s", "1990s".
@@ -1163,9 +1170,29 @@ export async function runPropertyPipeline(
     homesData?.bathrooms ||
     oneRoofData?.bathrooms
   );
+  const hasConflictingRoomCounts =
+    hasRoomCountConflict([
+      propertyValueData?.bedrooms,
+      qvData?.bedrooms,
+      homesData?.bedrooms,
+      oneRoofData?.bedrooms,
+    ]) ||
+    hasRoomCountConflict([
+      propertyValueData?.bathrooms,
+      qvData?.bathrooms,
+      homesData?.bathrooms,
+      oneRoofData?.bathrooms,
+    ]);
   if (
     !realestatePropertyProfile &&
-    (!finalCoverage.hasCV || !finalCoverage.hasBuildYear || !finalCoverage.hasFloorArea || !hasBedrooms || !hasBathrooms)
+    (
+      !finalCoverage.hasCV ||
+      !finalCoverage.hasBuildYear ||
+      !finalCoverage.hasFloorArea ||
+      !hasBedrooms ||
+      !hasBathrooms ||
+      hasConflictingRoomCounts
+    )
   ) {
     const profileResult = await timed(
       "realestate_property_profile",

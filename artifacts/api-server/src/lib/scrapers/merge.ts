@@ -463,6 +463,10 @@ function isFeeSimpleTitle(type: string | null | undefined): boolean {
 function titleClearlySpansMultipleParcels(legalDescriptions: string[]): boolean {
   if (legalDescriptions.length > 1) return true;
   const legal = legalDescriptions.join(" ");
+  const explicitParcelReferences = legal.match(
+    /\b(?:part\s+)?(?:lot|section)\s+\d+[a-z]?\b/gi,
+  ) ?? [];
+  if (explicitParcelReferences.length > 1) return true;
   return (
     /\b(?:lots|sections)\s+\d+/i.test(legal) ||
     /\b(?:lot|section)\s+\d+\s*(?:-|,|&|\band\b)\s*\d+/i.test(legal)
@@ -1083,6 +1087,7 @@ export function mergePropertyData(
   // stable when one scraper is temporarily unavailable or parses a bad value.
   if (!hasActiveDwellingListing) {
     const bedroomConsensus = roomCountConsensus("Bedrooms", bedrooms, sources["bedrooms"], [
+      { src: "realestate.co.nz property profile", value: realestateListing?.bedrooms },
       { src: "homes", value: homesBeds },
       { src: "qv", value: qvBeds },
       { src: "oneroof", value: oneroofProfileBeds },
@@ -1093,6 +1098,7 @@ export function mergePropertyData(
     bedrooms = bedroomConsensus.value;
 
     const bathroomConsensus = roomCountConsensus("Bathrooms", bathrooms, sources["bathrooms"], [
+      { src: "realestate.co.nz property profile", value: realestateListing?.bathrooms },
       { src: "homes", value: homesBaths },
       { src: "qv", value: qvBaths },
       { src: "oneroof", value: oneroofProfileBaths },

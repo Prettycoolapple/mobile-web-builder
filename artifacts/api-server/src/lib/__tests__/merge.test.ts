@@ -159,6 +159,82 @@ describe("mergePropertyData", () => {
     expect(merged.data_sources.land_area_sqm).toBe("linz_lrs_title");
   });
 
+  it("uses the complete Coyle Street title and corroborated property-profile bedrooms", () => {
+    const merged = mergePropertyData(
+      {
+        area_sqm: 817,
+        legal_description: "Lot 4 DP 19651",
+      } as any,
+      null,
+      null,
+      { zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any,
+      [],
+      {
+        contour: "flat",
+        asbestos_risk: "high",
+        infrastructure: [],
+        analysed_address: "6 Coyle Street, Sandringham, Auckland",
+        linz_lrs_title_preview: {
+          address_id: "coyle-6",
+          address: "6 Coyle Street, Sandringham, Auckland",
+          titles: [{
+            title_no: "NA822/81",
+            title_type: "Fee Simple",
+            title_status: "Live",
+            legal_descriptions: ["Lot 4 and Part Lot 3 Deposited Plan 19651"],
+            land_district: "North Auckland",
+            issue_date: "1944-09-22T00:00:00",
+            indicative_area_sqm: 1_072,
+          }],
+        },
+        propertyValue: {
+          address_confirmed: "6 Coyle Street, Sandringham, Auckland, 1025",
+          land_area_sqm: 1_072,
+          floor_area_sqm: 123,
+          bedrooms: 2,
+          bathrooms: 1,
+          build_year: 1920,
+          legal_descriptions: ["Lot 4 and Part Lot 3 Deposited Plan 19651"],
+        } as any,
+        homes: {
+          address_confirmed: "6 Coyle Street, Sandringham, Auckland",
+          land_area_sqm: 1_072,
+          floor_area_sqm: 123,
+          bedrooms: 3,
+          bathrooms: 2,
+          build_year_range: "1920-1929",
+        } as any,
+        realestate_listing: {
+          address: "6 Coyle Street, Sandringham, Auckland City, Auckland",
+          listingUrl: "https://www.realestate.co.nz/property/6-coyle-street-sandringham-auckland-city-auckland/x7cb2l88",
+          listingStatus: "property_profile",
+          price: null,
+          priceText: "",
+          landArea: 1_072,
+          floorArea: 123,
+          propertyType: "House",
+          photoUrl: null,
+          zone: null,
+          bedrooms: 2,
+          bathrooms: null,
+          buildYear: 1920,
+          cvNzd: 2_050_000,
+          cvYear: 2024,
+        },
+      },
+    );
+
+    expect(merged.land_area_sqm).toBe(1_072);
+    expect(merged.data_sources.land_area_sqm).toBe("linz_lrs_title");
+    expect(merged.bedrooms).toBe(2);
+    expect(merged.bathrooms).toBe(2);
+    expect(merged.data_sources.bedrooms).toBe("realestate.co.nz");
+    expect(merged.discrepancies).toEqual(expect.arrayContaining([
+      expect.stringContaining("complete property-level area"),
+      expect.stringContaining("Bedrooms: address-matched off-market records disagree"),
+    ]));
+  });
+
   it("retains the point parcel for ordinary, multiple-title, cross-lease, and child-address cases", () => {
     const baseTitle = {
       title_no: "TEST/1",
