@@ -4,6 +4,7 @@ import {
   fetchLINZAddressCandidates,
   fetchLINZLetterSuffixAddresses,
   fetchLINZTitlesByAddressDetailed,
+  fetchLINZUnitChildAddresses,
   lrsAddressLooksExact,
 } from "./linz";
 import type { LinzAddressSearchCandidate } from "./linz";
@@ -245,6 +246,27 @@ export async function detectSubdivision(address: string): Promise<SubdivisionRes
       }
     }
     return { isSubdivided: false, parentAddress: address, subLots: [] };
+  }
+
+  const linzUnitChildren = await fetchLINZUnitChildAddresses(address).catch(() => []);
+  if (linzUnitChildren.length >= 2) {
+    const subLots = linzUnitChildren.map((hit) => hit.address);
+    const identity = await classifyLinzSuffixTitles(address, subLots);
+    logger.info(
+      {
+        parent: address,
+        subLots,
+        classification: identity.classification,
+        source: "linz_lrs_slash_unit_search",
+      },
+      "Slash-unit children detected before parent analysis",
+    );
+    return {
+      isSubdivided: true,
+      parentAddress: address,
+      subLots,
+      ...identity,
+    };
   }
 
   const confirmed = confirmedSubdivisionFor(address, number, rest);

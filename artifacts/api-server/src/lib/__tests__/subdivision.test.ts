@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { detectSubdivision, mergeSubdivisionCorrection, parseStreetNumberSuffix } from "../subdivision";
 import { geocodeAddress } from "../geocode";
-import { fetchLINZAddressCandidates, fetchLINZLetterSuffixAddresses, fetchLINZTitlesByAddressDetailed } from "../linz";
+import {
+  fetchLINZAddressCandidates,
+  fetchLINZLetterSuffixAddresses,
+  fetchLINZTitlesByAddressDetailed,
+  fetchLINZUnitChildAddresses,
+} from "../linz";
 
 vi.mock("../geocode", () => ({
   geocodeAddress: vi.fn(),
@@ -11,6 +16,7 @@ vi.mock("../linz", () => ({
   fetchLINZAddressCandidates: vi.fn(async () => []),
   fetchLINZLetterSuffixAddresses: vi.fn(async () => []),
   fetchLINZTitlesByAddressDetailed: vi.fn(async () => ({ preview: null, status: "no_result", source: null })),
+  fetchLINZUnitChildAddresses: vi.fn(async () => []),
   lrsAddressLooksExact: vi.fn((requested: string, candidate: string) => {
     const normalise = (value: string) =>
       value
@@ -31,6 +37,7 @@ const mockedGeocodeAddress = vi.mocked(geocodeAddress);
 const mockedFetchLINZAddressCandidates = vi.mocked(fetchLINZAddressCandidates);
 const mockedFetchLINZLetterSuffixAddresses = vi.mocked(fetchLINZLetterSuffixAddresses);
 const mockedFetchLINZTitlesByAddressDetailed = vi.mocked(fetchLINZTitlesByAddressDetailed);
+const mockedFetchLINZUnitChildAddresses = vi.mocked(fetchLINZUnitChildAddresses);
 
 describe("subdivision detection", () => {
   beforeEach(() => {
@@ -41,6 +48,8 @@ describe("subdivision detection", () => {
     mockedFetchLINZLetterSuffixAddresses.mockResolvedValue([]);
     mockedFetchLINZTitlesByAddressDetailed.mockReset();
     mockedFetchLINZTitlesByAddressDetailed.mockResolvedValue({ preview: null, status: "no_result", source: null });
+    mockedFetchLINZUnitChildAddresses.mockReset();
+    mockedFetchLINZUnitChildAddresses.mockResolvedValue([]);
   });
 
   it("parses parent and child street-number suffixes", () => {
@@ -110,6 +119,41 @@ describe("subdivision detection", () => {
       parentAddress: "5/174 East Coast Road, Forrest Hill, Auckland",
       subLots: [],
     });
+  });
+
+  it("asks which verified slash-unit child to analyse before accepting the parent", async () => {
+    mockedFetchLINZUnitChildAddresses.mockResolvedValue([
+      {
+        unit: "1",
+        address: "1/144 Sunset Road, Unsworth Heights, Auckland",
+        id: "1866395",
+        rank: 0.64,
+        lat: -36.75576865,
+        lng: 174.72605715,
+      },
+      {
+        unit: "2",
+        address: "2/144 Sunset Road, Unsworth Heights, Auckland",
+        id: "1866396",
+        rank: 0.64,
+        lat: -36.75576225,
+        lng: 174.7259765,
+      },
+    ]);
+
+    await expect(
+      detectSubdivision("144 Sunset Road, Unsworth Heights"),
+    ).resolves.toMatchObject({
+      isSubdivided: true,
+      parentAddress: "144 Sunset Road, Unsworth Heights",
+      subLots: [
+        "1/144 Sunset Road, Unsworth Heights, Auckland",
+        "2/144 Sunset Road, Unsworth Heights, Auckland",
+      ],
+      classification: "unverified_multiple_addresses",
+    });
+    expect(mockedFetchLINZAddressCandidates).not.toHaveBeenCalled();
+    expect(mockedFetchLINZLetterSuffixAddresses).not.toHaveBeenCalled();
   });
 
   it("lets a confirmed base address win over neighbouring LINZ suffix addresses", async () => {

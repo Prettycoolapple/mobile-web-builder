@@ -32,14 +32,21 @@ import { useT } from "@/lib/i18n";
 import { translateForOS } from "@/lib/i18n";
 import { getApiBase } from "@/lib/api";
 import { AiSubdivisionIntroModal } from "@/components/report/AiSubdivisionIntroModal";
+import {
+  pointsString,
+  projectCoordinate,
+  type Coordinate,
+  type SitePlanBounds,
+} from "@/components/report/mapProjection";
+import { renderSubdivisionOverlay } from "@/components/report/SubdivisionOverlay";
+import { SubdivisionPanel } from "@/components/report/SubdivisionPanel";
+import { useSubdivision } from "@/components/report/useSubdivision";
 
 // The subject parcel ("boundary") and the surrounding property boundaries ("nearby-boundaries")
 // are always drawn and not user-toggleable — they form the base context for the site plan.
 const ALWAYS_ON_LAYERS = new Set(["boundary", "nearby-boundaries"]);
 const SITE_PLAN_STALE_TIME_MS = 15 * 60 * 1000;
 const SITE_PLAN_GC_TIME_MS = 60 * 60 * 1000;
-
-type Coordinate = [number, number];
 
 type GeoJsonGeometry =
   | { type: "Point"; coordinates: Coordinate }
@@ -57,13 +64,6 @@ type GeoJsonFeature = {
 type GeoJsonFeatureCollection = {
   type: "FeatureCollection";
   features: GeoJsonFeature[];
-};
-
-type SitePlanBounds = {
-  minLat: number;
-  maxLat: number;
-  minLng: number;
-  maxLng: number;
 };
 
 type SitePlanLayer = {
@@ -113,38 +113,10 @@ type LayerGroupCache = {
   groups: Map<string, React.ReactNode>;
 };
 
-function mercatorX(lng: number): number {
-  return (lng + 180) / 360;
-}
-
-function mercatorY(lat: number): number {
-  const clamped = Math.max(-85.05112878, Math.min(85.05112878, lat));
-  const sin = Math.sin((clamped * Math.PI) / 180);
-  return 0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI);
-}
-
-function projectCoordinate(coord: Coordinate, bounds: SitePlanBounds, width: number, height: number): Coordinate {
-  const [lng, lat] = coord;
-  const west = mercatorX(bounds.minLng);
-  const east = mercatorX(bounds.maxLng);
-  const north = mercatorY(bounds.maxLat);
-  const south = mercatorY(bounds.minLat);
-  const x = ((mercatorX(lng) - west) / Math.max(1e-9, east - west)) * width;
-  const y = ((mercatorY(lat) - north) / Math.max(1e-9, south - north)) * height;
-  return [x, y];
-}
-
 function clampMapTranslation(value: number, contentSize: number, viewportSize: number): number {
   "worklet";
   const limit = Math.max(0, (contentSize - viewportSize) / 2);
   return Math.min(limit, Math.max(-limit, value));
-}
-
-function pointsString(coords: Coordinate[], bounds: SitePlanBounds, width: number, height: number): string {
-  return coords
-    .map((coord) => projectCoordinate(coord, bounds, width, height))
-    .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
-    .join(" ");
 }
 
 function collectCoordinates(features: GeoJsonFeature[]): Coordinate[] {
@@ -509,6 +481,30 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
     queryFn: () => fetchSitePlan(searchId!, report.address, getApiHeaders()),
   });
 
+  // Rubin can resolve an address itself, but the site-plan centroid is the exact
+  // parcel this card already draws — passing it avoids a second geocode landing
+  // on a neighbouring property. Held until the site-plan query settles so the
+  // subdivision target's identity cannot change underneath an in-flight solve.
+  const sitePlanSettled = !query.isLoading;
+  const centerLat = query.data?.center.lat;
+  const centerLng = query.data?.center.lng;
+  // `searchId` is also required: without it this card renders an empty state and
+  // never draws a subdivision, so requesting one would be a wasted upstream call.
+  const subdivisionTarget = useMemo(
+    () =>
+      sitePlanSettled && searchId
+        ? { address: report.address, lat: centerLat ?? null, lng: centerLng ?? null }
+        : {},
+    [sitePlanSettled, searchId, report.address, centerLat, centerLng],
+  );
+  const subdivision = useSubdivision(subdivisionTarget);
+
+  const selectedSubdivisionScenario = useMemo(
+    () =>
+      subdivision.solvedScenarios.find((entry) => entry.id === subdivision.selectedScenarioId) ?? null,
+    [subdivision.solvedScenarios, subdivision.selectedScenarioId],
+  );
+
   const layersSignature = useMemo(
     () => query.data?.layers.map((layer) => `${layer.id}:${layer.available}:${layer.defaultVisible}`).join("|") ?? "",
     [query.data?.layers],
@@ -695,6 +691,9 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
   };
 
   const recordAiSubdivisionInterest = () => {
+    // Never open the funnel for a site Rubin cannot analyse — the user would be
+    // walked through an explainer only to hit an error at the end.
+    if (!subdivision.available) return;
     setShowAiModal(true);
     aiInterestEventRef.current = fetch(`${getApiBase()}/ai-subdivision-interest`, {
       method: "POST",
@@ -713,18 +712,24 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
   };
 
   useEffect(() => {
+    // Waits on `available`, so a request arriving from chat opens the funnel only
+    // once the gating lookup has confirmed Rubin covers this parcel.
+    if (!subdivision.available) return;
     const shouldAutoOpen = autoOpenAiSubdivision && !didAutoOpenAiSubdivisionRef.current;
     const shouldOpenFromAction = launchAiSubdivisionNonce > lastLaunchAiSubdivisionNonceRef.current;
     if (!shouldAutoOpen && !shouldOpenFromAction) return;
     if (shouldAutoOpen) didAutoOpenAiSubdivisionRef.current = true;
     lastLaunchAiSubdivisionNonceRef.current = launchAiSubdivisionNonce;
     recordAiSubdivisionInterest();
-  }, [autoOpenAiSubdivision, launchAiSubdivisionNonce]);
+  }, [autoOpenAiSubdivision, launchAiSubdivisionNonce, subdivision.available]);
 
   const completeAiSubdivisionInterest = () => {
     const eventPromise = aiInterestEventRef.current;
     setShowAiModal(false);
     aiInterestEventRef.current = null;
+    // The funnel is done — run the real analysis. Fires two parallel scenario
+    // solves; results stream into the panel as each lands.
+    subdivision.start();
     if (!eventPromise) return;
     void eventPromise.then(async (eventId) => {
       if (!eventId) return;
@@ -771,6 +776,30 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
     ) ?? [],
     [query.data?.layers],
   );
+
+  // One honest line explaining why the AI Subdivision button is inert. Rubin's
+  // own 404 ("no cadastral parcel found") would read as a defect, so the two
+  // real causes — outside Auckland, or a non-residential zone — are named.
+  const subdivisionNotice = useMemo(() => {
+    if (subdivision.available || subdivision.hasStarted) return null;
+    if (subdivision.siteLoading) return translateForOS("site_plan.subdivision.checking");
+    if (subdivision.siteError) return translateForOS("site_plan.subdivision.site_error");
+    const result = subdivision.siteResult;
+    if (!result || result.supported) return null;
+    if (result.reason === "unsupported-zone") {
+      return report.zone_label
+        ? translateForOS("site_plan.subdivision.unavailable_zone", { zone: report.zone_label })
+        : translateForOS("site_plan.subdivision.unavailable_zone_generic");
+    }
+    return translateForOS("site_plan.subdivision.unavailable_region");
+  }, [
+    subdivision.available,
+    subdivision.hasStarted,
+    subdivision.siteLoading,
+    subdivision.siteError,
+    subdivision.siteResult,
+    report.zone_label,
+  ]);
 
   const layerGroupCacheKey = useMemo(() => {
     const image = query.data?.image;
@@ -858,34 +887,58 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
           </Text>
         </View>
         <View style={styles.aiButtonWrap}>
-          <Animated.View style={[styles.aiButtonGlow, animatedAiButtonStyle]}>
-            <TouchableOpacity
-              style={styles.aiButtonTouch}
-              onPress={recordAiSubdivisionInterest}
-              activeOpacity={0.78}
-              accessibilityRole="button"
-              accessibilityLabel={translateForOS("site_plan.ai_subdivision")}
-            >
-              <LinearGradient
-                colors={["#C4B5FD", "#F9A8D4", "#FDBA74", "#C4B5FD"]}
-                start={{ x: 0, y: 0.15 }}
-                end={{ x: 1, y: 0.85 }}
-                style={styles.aiButtonBorder}
+          {subdivision.available ? (
+            <Animated.View style={[styles.aiButtonGlow, animatedAiButtonStyle]}>
+              <TouchableOpacity
+                style={styles.aiButtonTouch}
+                onPress={recordAiSubdivisionInterest}
+                disabled={subdivision.isSolving}
+                activeOpacity={0.78}
+                accessibilityRole="button"
+                accessibilityLabel={translateForOS("site_plan.ai_subdivision")}
               >
                 <LinearGradient
-                  colors={["#7C3AED", "#DB2777", "#F97316"]}
+                  colors={["#C4B5FD", "#F9A8D4", "#FDBA74", "#C4B5FD"]}
                   start={{ x: 0, y: 0.15 }}
                   end={{ x: 1, y: 0.85 }}
-                  style={styles.aiButton}
+                  style={styles.aiButtonBorder}
                 >
-                  <Feather name="grid" size={13} color="#FFFFFF" />
-                  <Text style={styles.aiButtonText} numberOfLines={1}>
-                    {translateForOS("site_plan.ai_subdivision")}
-                  </Text>
+                  <LinearGradient
+                    colors={["#7C3AED", "#DB2777", "#F97316"]}
+                    start={{ x: 0, y: 0.15 }}
+                    end={{ x: 1, y: 0.85 }}
+                    style={styles.aiButton}
+                  >
+                    <Feather name="grid" size={13} color="#FFFFFF" />
+                    <Text style={styles.aiButtonText} numberOfLines={1}>
+                      {translateForOS("site_plan.ai_subdivision")}
+                    </Text>
+                  </LinearGradient>
                 </LinearGradient>
-              </LinearGradient>
-            </TouchableOpacity>
-          </Animated.View>
+              </TouchableOpacity>
+            </Animated.View>
+          ) : (
+            // Rubin is Auckland-only. Rather than let a user tap into a raw 404,
+            // the control is inert and the reason is stated under the map.
+            <View
+              style={[styles.aiButtonDisabled, { backgroundColor: colors.muted, borderColor: colors.border }]}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: true }}
+              accessibilityLabel={translateForOS("site_plan.ai_subdivision")}
+            >
+              {subdivision.siteLoading ? (
+                <ActivityIndicator size="small" color={colors.mutedForeground} />
+              ) : (
+                <Feather name="grid" size={13} color={colors.mutedForeground} />
+              )}
+              <Text
+                style={[styles.aiButtonDisabledText, { color: colors.mutedForeground }]}
+                numberOfLines={1}
+              >
+                {translateForOS("site_plan.ai_subdivision")}
+              </Text>
+            </View>
+          )}
         </View>
       </View>
 
@@ -980,6 +1033,17 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
                 preserveAspectRatio="xMidYMid meet"
               >
                 {visibleVectorLayers.map((layer) => getLayerGroup(layer))}
+                {/* Generated lots draw last so they sit above the council layers
+                    they are proposed over. Same bounds and viewBox as everything
+                    else, so no reprojection is involved. */}
+                {selectedSubdivisionScenario
+                  ? renderSubdivisionOverlay(
+                      selectedSubdivisionScenario,
+                      query.data.image.bounds,
+                      query.data.image.width,
+                      query.data.image.height,
+                    )
+                  : null}
               </Svg>
             </Animated.View>
           </GestureDetector>
@@ -998,6 +1062,24 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
           </View>
         ) : null}
       </View>
+
+      {subdivisionNotice ? (
+        <View style={[styles.subdivisionNotice, { borderTopColor: colors.border }]}>
+          <Feather name="info" size={13} color={colors.mutedForeground} />
+          <Text style={[styles.subdivisionNoticeText, { color: colors.mutedForeground }]}>
+            {subdivisionNotice}
+          </Text>
+          {subdivision.siteError ? (
+            <TouchableOpacity onPress={subdivision.retrySite} activeOpacity={0.8}>
+              <Text style={[styles.subdivisionNoticeAction, { color: colors.accent }]}>
+                {translateForOS("site_plan.subdivision.retry")}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
+
+      <SubdivisionPanel state={subdivision} solverVersion={subdivision.solverVersion} />
 
       {query.data ? (
         <View style={[styles.legend, { borderTopColor: colors.border }]}>
@@ -1067,6 +1149,41 @@ const styles = StyleSheet.create({
   aiButtonWrap: {
     position: "relative",
     alignItems: "flex-end",
+  },
+  aiButtonDisabled: {
+    minWidth: 112,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+  },
+  aiButtonDisabledText: {
+    fontFamily: "DM_Sans_600SemiBold",
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  subdivisionNotice: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  subdivisionNoticeText: {
+    flex: 1,
+    fontFamily: "DM_Sans_400Regular",
+    fontSize: 11.5,
+    lineHeight: 16,
+  },
+  subdivisionNoticeAction: {
+    fontFamily: "DM_Sans_600SemiBold",
+    fontSize: 11.5,
+    lineHeight: 16,
   },
   aiButtonText: {
     color: "#FFFFFF",

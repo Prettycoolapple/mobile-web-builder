@@ -119,6 +119,16 @@ export function getTwilioInboundSmsUrl(): string {
   return `${getPublicAppUrl()}/api/webhooks/twilio/inbound`;
 }
 
+/**
+ * Origin of Rubin, the subdivision solver (see `lib/rubin.ts`). Configurable so
+ * a staging deployment can be pointed at without shipping a new app build — the
+ * mobile client only ever calls us, never Rubin.
+ */
+export function getRubinApiBase(): string {
+  const value = readOptional("RUBIN_API_BASE") ?? "https://rubin-one.vercel.app";
+  return value.replace(/\/+$/, "");
+}
+
 export function getGoogleCloudProjectId(): string | undefined {
   return readOptional("GOOGLE_CLOUD_PROJECT_ID") ?? undefined;
 }

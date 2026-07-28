@@ -16,7 +16,9 @@ import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useT } from "@/lib/i18n";
 
-type StepId = "planning" | "consultant" | "upgrade" | "launch";
+// The final step used to be "launch" — a pre-release notice with a date. The
+// solver is live now, so the funnel ends by actually starting the analysis.
+type StepId = "planning" | "consultant" | "upgrade" | "run";
 
 interface Props {
   visible: boolean;
@@ -29,7 +31,7 @@ const STEP_ICONS: Record<StepId, keyof typeof Feather.glyphMap> = {
   planning: "grid",
   consultant: "users",
   upgrade: "lock",
-  launch: "calendar",
+  run: "play-circle",
 };
 
 const DEMO_VIDEO = require("../../assets/videos/ai-subdivision.mp4");
@@ -93,8 +95,8 @@ export function AiSubdivisionIntroModal({
   const steps = useMemo<StepId[]>(
     () =>
       showUpgradeSlide
-        ? ["planning", "consultant", "upgrade", "launch"]
-        : ["planning", "consultant", "launch"],
+        ? ["planning", "consultant", "upgrade", "run"]
+        : ["planning", "consultant", "run"],
     [showUpgradeSlide],
   );
 
@@ -106,13 +108,13 @@ export function AiSubdivisionIntroModal({
   }, [visible]);
 
   const step = steps[Math.min(stepIndex, steps.length - 1)] ?? "planning";
-  const isFinal = step === "launch";
+  const isFinal = step === "run";
 
   const demoMediaMaxHeight = Math.max(150, Math.min(300, winHeight * 0.3));
   const title = t(`site_plan.ai_modal.${step}.title`);
   const body = t(`site_plan.ai_modal.${step}.body`);
   const primaryLabel = isFinal
-    ? t("site_plan.ai_modal.ok")
+    ? t("site_plan.ai_modal.run_now")
     : step === "upgrade"
       ? t("site_plan.ai_modal.pay_now")
       : t("site_plan.ai_modal.next");

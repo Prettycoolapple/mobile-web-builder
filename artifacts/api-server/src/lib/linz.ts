@@ -358,6 +358,15 @@ export interface LinzLetterSuffixAddressCandidate {
   rank: number | null;
 }
 
+export interface LinzUnitChildAddressCandidate {
+  unit: string;
+  address: string;
+  id: string;
+  rank: number | null;
+  lat?: number | null;
+  lng?: number | null;
+}
+
 export interface LinzAddressSearchCandidate {
   address: string;
   id: string;
@@ -369,7 +378,7 @@ export interface LinzAddressSearchCandidate {
 
 export async function fetchLINZAddressCandidates(
   address: string,
-  opts: { timeoutMs?: number; maxResults?: number } = {},
+  opts: { timeoutMs?: number; maxResults?: number; exactQueryOnly?: boolean } = {},
 ): Promise<LinzAddressSearchCandidate[]> {
   const initialQuery = address.trim();
   if (!initialQuery) return [];
@@ -377,7 +386,8 @@ export async function fetchLINZAddressCandidates(
   const maxResults = opts.maxResults ?? 5;
   const byAddress = new Map<string, LinzAddressSearchCandidate>();
 
-  for (const query of lrsAddressQueryVariants(initialQuery)) {
+  const queries = opts.exactQueryOnly ? [initialQuery] : lrsAddressQueryVariants(initialQuery);
+  for (const query of queries) {
     try {
       const url = new URL(`${LINZ_LRS_PUBLIC_BASE}/public-search-caches/addresses`);
       url.searchParams.set("q", query);
@@ -430,6 +440,84 @@ export async function fetchLINZAddressCandidates(
   }
 
   return Array.from(byAddress.values()).slice(0, maxResults);
+}
+
+/**
+ * Resolve official numeric slash-unit children for a parent street address.
+ *
+ * LINZ's address search usually returns only the exact parent for a query such
+ * as "144 Sunset Road", even when "1/144" and "2/144" also exist. Probe the
+ * first few unit numbers directly, then extend the scan only after at least two
+ * verified children establish that the parent is ambiguous. Explicit slash
+ * addresses are deliberately ignored so a selected child is never interrupted.
+ */
+export async function fetchLINZUnitChildAddresses(
+  parentAddress: string,
+  opts: { timeoutMs?: number; maxUnit?: number; initialProbeCount?: number } = {},
+): Promise<LinzUnitChildAddressCandidate[]> {
+  const query = parentAddress.trim();
+  if (!query || /^\s*\d+[a-z]?\s*\/\s*\d+/i.test(query)) return [];
+
+  const parsed = query.match(/^(\d+)\s+(.+)$/);
+  if (!parsed) return [];
+  const [, streetNumber, rest] = parsed;
+  const timeoutMs = opts.timeoutMs ?? 6500;
+  const maxUnit = Math.max(2, Math.min(30, opts.maxUnit ?? 16));
+  const initialProbeCount = Math.max(2, Math.min(maxUnit, opts.initialProbeCount ?? 4));
+
+  const probe = async (unitNumber: number): Promise<LinzUnitChildAddressCandidate | null> => {
+    const unit = String(unitNumber);
+    const candidateQuery = `${unit}/${streetNumber} ${rest}`;
+    const matches = await fetchLINZAddressCandidates(candidateQuery, {
+      timeoutMs,
+      maxResults: 1,
+      exactQueryOnly: true,
+    }).catch(() => []);
+    const match = matches[0];
+    if (!match) return null;
+    const childPattern = new RegExp(`^${unit}\\s*\\/\\s*${streetNumber}\\s+`, "i");
+    if (!childPattern.test(match.address)) return null;
+    return {
+      unit,
+      address: match.address,
+      id: match.id,
+      rank: match.rank,
+      lat: match.lat ?? null,
+      lng: match.lng ?? null,
+    };
+  };
+
+  const initial = (await Promise.all(
+    Array.from({ length: initialProbeCount }, (_, index) => probe(index + 1)),
+  )).filter((candidate): candidate is LinzUnitChildAddressCandidate => candidate != null);
+
+  if (initial.length < 2 || initialProbeCount >= maxUnit) return initial;
+
+  const found = [...initial];
+  const highestInitialUnit = Math.max(...initial.map((candidate) => Number(candidate.unit)));
+  // Two empty unit numbers after the highest verified child are a strong stop
+  // signal for ordinary cross-lease groups such as 1/144 and 2/144.
+  if (highestInitialUnit <= initialProbeCount - 2) return found;
+
+  const batchSize = 4;
+  for (let start = initialProbeCount + 1; start <= maxUnit; start += batchSize) {
+    const end = Math.min(maxUnit, start + batchSize - 1);
+    const batch = (await Promise.all(
+      Array.from({ length: end - start + 1 }, (_, index) => probe(start + index)),
+    )).filter((candidate): candidate is LinzUnitChildAddressCandidate => candidate != null);
+    found.push(...batch);
+
+    const highestFound = found.length
+      ? Math.max(...found.map((candidate) => Number(candidate.unit)))
+      : 0;
+    if (batch.length === 0 || highestFound <= end - 2) break;
+  }
+
+  const byAddress = new Map<string, LinzUnitChildAddressCandidate>();
+  for (const candidate of found) {
+    byAddress.set(normaliseLrsAddress(candidate.address), candidate);
+  }
+  return [...byAddress.values()].sort((a, b) => Number(a.unit) - Number(b.unit));
 }
 
 /**
