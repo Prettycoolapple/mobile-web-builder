@@ -61,6 +61,9 @@ artifacts/api-server/deploy/
 # EAS / editor temp copies of Expo app.json
 artifacts/mobile/app.json.*
 
+# Nested sibling project (own repo, own npm lockfile)
+/rubin/
+
 # local secrets
 .env
 .env.local
