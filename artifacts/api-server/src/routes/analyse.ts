@@ -66,6 +66,7 @@ import { formatNZD } from "../lib/utils";
 import { searchRealEstateListings, resolveDistrictToSuburbs, detectDirectionalAreaTerm } from "../lib/scrapers/realestate-search";
 import { preScreenListingsFastDetailed, type PropertyCandidate } from "../lib/pre-screen";
 import { isLinzTitleServiceAvailable } from "../lib/linz";
+import { resolveConfirmedQueuedPackage } from "../lib/queued-combined-package";
 import {
   hasStandardSubdivisionYield,
   isDevelopmentDiscoveryIntent,
@@ -4740,9 +4741,23 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
   try {
     const conv = (job.conversationHistory as Array<{ role: "user" | "assistant"; content: string }> | null) ?? [];
     const locale = (job.locale === "zh" ? "zh" : "en") as ReturnType<typeof normaliseLocale>;
-    const combinedPackage =
+    const liveCombinedPackage =
       await resolveCombinedPackage(job.queryAddress)
       ?? await resolveCombinedPackage(job.analysisAddress);
+    const combinedPackage =
+      liveCombinedPackage
+      ?? resolveConfirmedQueuedPackage(job.queryAddress, job.analysisAddress);
+    if (!liveCombinedPackage && combinedPackage) {
+      log.info(
+        {
+          queryAddress: job.queryAddress,
+          packageAddress: combinedPackage.packageAddress,
+          childAddresses: combinedPackage.childAddresses,
+          marker: "CONFIRMED_QUEUED_PACKAGE_FALLBACK",
+        },
+        "Using package decision already confirmed before the mobile job was queued",
+      );
+    }
     const result = combinedPackage
       ? await runCombinedFeasibilityGroupCore({
           packageAddress: combinedPackage.packageAddress,
