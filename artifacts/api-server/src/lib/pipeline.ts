@@ -45,9 +45,10 @@ import {
   type SubdivisionPathwayAssessment,
 } from "./lot-calculator";
 import { estimateCosts, type CostBreakdown } from "./cost-estimator";
+import { classifySiteCondition } from "./site-condition";
 import { getComparables, type ComparableSale, type ComparablesResult } from "./comparables";
 import { calculateBearBaseBullScenarios, exitGdvTypologyDiscountFactor, nearestHorizonRoiPercent, type ROIScenario } from "./roi-calculator";
-import { selectComparableSalesForExit } from "./market-comparables";
+import { isImprovedDwellingComparable, selectComparableSalesForExit } from "./market-comparables";
 import { fetchNeighbourhoodContext, type NeighbourhoodContext } from "./neighbourhood-context";
 import { fetchTransportContext, type TransportContext } from "./transport-context";
 import {
@@ -657,6 +658,11 @@ export async function runPropertyPipeline(
      * lookups continue to use `address`.
      */
     geocodeFallbackAddress?: string | null;
+    /** Coordinated delivery assumptions for separately analysed package sites. */
+    packageDevelopment?: {
+      siteCount: number;
+      constructionDiscountPercent: number;
+    } | null;
   } = {},
 ): Promise<PipelineResult> {
   const timing: Record<string, number> = {};
@@ -1310,6 +1316,7 @@ export async function runPropertyPipeline(
   // Veolia (Papakura) private water network flag — pure function of the geocoded
   // location, so recompute every serve (no external call, no cache field).
   merged.veolia_service_zone = detectVeoliaServiceZone(lat, lng);
+  merged.package_development_context = options.packageDevelopment ?? null;
   if (shouldSuppressAucklandPlanningRules(planningProvider)) {
     const ruleStatus = regionalPlanningRuleStatus(planningProvider, zoneData, merged.land_area_sqm, merged.overlays);
     if (merged.zone_code || merged.min_lot_size_sqm) {
@@ -1781,7 +1788,12 @@ export async function runPropertyPipeline(
     lng,
     merged.comparables.length > 0 ? merged.comparables : undefined,
   );
-  if (comparablesResult.comparables.length < 3) {
+  const subjectSiteCondition = classifySiteCondition(merged);
+  const requireImprovedDwellingComparables = subjectSiteCondition.siteStatus === "vacant_land";
+  const usableComparableCount = () => requireImprovedDwellingComparables
+    ? comparablesResult.comparables.filter(isImprovedDwellingComparable).length
+    : comparablesResult.comparables.length;
+  if (usableComparableCount() < 3) {
     const sup = await timed(
       "realestate_comparables",
       () =>
@@ -1792,6 +1804,7 @@ export async function runPropertyPipeline(
           landHintSqm: merged.land_area_sqm,
           minTarget: 3,
           maxResults: 5,
+          requireImprovedDwelling: requireImprovedDwellingComparables,
         }),
       timing,
     );
@@ -1830,7 +1843,7 @@ export async function runPropertyPipeline(
       : null;
   if (
     regionalComparableFallback &&
-    comparablesResult.comparables.length < 3 &&
+    usableComparableCount() < 3 &&
     regionalComparableFallback.toLowerCase() !== suburb.toLowerCase()
   ) {
     const districtSupplement = await timed(
@@ -1842,6 +1855,7 @@ export async function runPropertyPipeline(
         landHintSqm: merged.land_area_sqm,
         minTarget: 3,
         maxResults: 8,
+        requireImprovedDwelling: requireImprovedDwellingComparables,
       }),
       timing,
     );
@@ -1873,6 +1887,7 @@ export async function runPropertyPipeline(
     sqmPerLot: modelledLotResult.sqm_per_lot,
     subjectLandSqm: merged.land_area_sqm,
     maxSelect: 3,
+    requireImprovedDwelling: requireImprovedDwellingComparables,
   });
   if (comparablesResult.comparables.length > 0) {
     comparablesResult = withComparableAverages(comparablesResult, comparableSelection.comparables);
@@ -1884,6 +1899,12 @@ export async function runPropertyPipeline(
     market_floor_price_per_sqm: marketPsm,
     sqm_per_lot: modelledLotResult.sqm_per_lot,
     cost_profile: costProfile,
+    construction_cost_multiplier: options.packageDevelopment
+      ? Number((1 - options.packageDevelopment.constructionDiscountPercent / 100).toFixed(4))
+      : 1,
+    construction_discount_reason: options.packageDevelopment
+      ? `${options.packageDevelopment.constructionDiscountPercent}% coordinated package delivery saving across ${options.packageDevelopment.siteCount} adjoining sites.`
+      : null,
   });
 
   const strategyAssessmentPromise = assessDevelopmentStrategy({
@@ -1983,7 +2004,7 @@ export async function runPropertyPipeline(
     comparablesQuality: comparablesResult.data_quality,
     gdvTypologyMultiplier,
     marketGdvMultiplier: neighbourhoodGdvMultiplier,
-    typologyMatchedComparables: false,
+    typologyMatchedComparables: comparableSelection.typologyMatched,
     neighbourhoodContext,
     subdivisionAssessment,
   });

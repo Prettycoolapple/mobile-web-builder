@@ -30,6 +30,86 @@ export interface Message {
   content: string;
 }
 
+export interface CombinedListingPackageClassification {
+  isPackage: boolean;
+  confidence: number;
+  reason: string;
+}
+
+/**
+ * Confirms that a range/listing represents multiple separately developable
+ * properties rather than one building whose postal address happens to contain
+ * a number range. Strong title/parcel language is accepted deterministically;
+ * otherwise the model supplies the semantic decision and a conservative
+ * fallback rejects ambiguity.
+ */
+export async function classifyCombinedListingPackage(input: {
+  requestedAddress: string;
+  listingAddress: string;
+  listingTitle?: string | null;
+  description?: string | null;
+  propertyType?: string | null;
+  childAddresses: string[];
+}): Promise<CombinedListingPackageClassification> {
+  const listingText = [input.listingTitle, input.description, input.propertyType]
+    .filter(Boolean)
+    .join(" ");
+  const strongPositive =
+    /\b(?:two|three|four|five|\d+)\s+(?:adjoining\s+)?(?:separate\s+)?(?:titles?|parcels?|sections?|properties|sites?)\b/i.test(listingText)
+    || /\b(?:multiple|several)\s+(?:adjoining\s+)?(?:titles?|parcels?|sections?|properties|sites?)\b/i.test(listingText)
+    || /\bcombined\s+(?:landholding|holding|sale|package)\b/i.test(listingText)
+    || /\bblock\s+of\s+(?:two|three|four|five|\d+)\s+(?:titles?|parcels?|sections?|properties|sites?)\b/i.test(listingText);
+  if (strongPositive) {
+    return {
+      isPackage: true,
+      confidence: 0.99,
+      reason: "Listing text explicitly identifies multiple titles, parcels, sections, sites, or a combined landholding.",
+    };
+  }
+
+  const facts = {
+    ...input,
+    instruction:
+      "A package means multiple distinct titles/parcels/properties are offered together. A single building or property with a ranged postal address is not a package.",
+  };
+  try {
+    const response = await ai.models.generateContent({
+      model: "deepseek-chat",
+      config: { maxOutputTokens: 256, temperature: 0 },
+      contents: [{
+        role: "user",
+        parts: [{
+          text:
+            "Classify this NZ real-estate listing. Return only JSON as " +
+            '{"isPackage":boolean,"confidence":number,"reason":"short sentence"}. ' +
+            "Use semantic meaning, not exact keywords. Be conservative when the listing does not establish distinct properties.\n" +
+            JSON.stringify(facts),
+        }],
+      }],
+    });
+    const raw = (response.text ?? "").replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error("No package-classification JSON");
+    const parsed = JSON.parse(match[0]) as Partial<CombinedListingPackageClassification>;
+    return {
+      isPackage: parsed.isPackage === true,
+      confidence: typeof parsed.confidence === "number"
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : 0.5,
+      reason: typeof parsed.reason === "string" && parsed.reason.trim()
+        ? parsed.reason.trim()
+        : "Semantic package-listing classification.",
+    };
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "Combined listing semantic classification failed");
+    return {
+      isPackage: false,
+      confidence: 0.25,
+      reason: "The listing did not deterministically establish multiple separate properties.",
+    };
+  }
+}
+
 export type ChatMode = "analyse" | "discover" | "followup";
 export type ChatIntentCategory =
   | "property_discovery"

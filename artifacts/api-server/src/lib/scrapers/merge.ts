@@ -75,6 +75,11 @@ export interface MergedPropertyData {
    * is recomputed every serve rather than cached.
    */
   veolia_service_zone?: import("../veolia-service-zone").VeoliaServiceZone | null;
+  /** Present only while deriving reports for an adjoining multi-title package. */
+  package_development_context?: {
+    siteCount: number;
+    constructionDiscountPercent: number;
+  } | null;
 }
 
 // ─── Simple "first non-null" helper ──────────────────────────────────────────
@@ -791,7 +796,26 @@ export function mergePropertyData(
     && qv.bedrooms == null
     && qv.bathrooms == null
   );
-  const hasActiveDwellingListing = !!oneroof?.listing_active || hasActiveRealestateListing;
+  const listingSignalsDwelling = (listing: {
+    bedrooms?: number | null;
+    floorArea?: number | null;
+    propertyType?: string | null;
+    listingCategory?: string | null;
+  } | null | undefined): boolean => {
+    const typeText = [listing?.propertyType, listing?.listingCategory].filter(Boolean).join(" ");
+    if (/\b(section|vacant\s+land|bare\s+land|residential\s+land)\b/i.test(typeText)) return false;
+    return (listing?.bedrooms ?? 0) > 0
+      || (listing?.floorArea ?? 0) >= 30
+      || /\b(house|home|dwelling|townhouse|terrace|unit|apartment)\b/i.test(typeText);
+  };
+  const oneroofSignalsDwelling = !!oneroof?.listing_active && (
+    (oneroof.bedrooms ?? 0) > 0
+    || (oneroof.floor_area_sqm ?? 0) >= 30
+    || oneroof.build_year != null
+  );
+  const hasActiveDwellingListing =
+    oneroofSignalsDwelling
+    || (hasActiveRealestateListing && !hasIgnoredCombinedListing && listingSignalsDwelling(realestateListing));
   if (
     propertyValueConfirmsVacant &&
     !propertyValueHasStrongDwellingEvidence(propertyValue) &&
@@ -1206,6 +1230,26 @@ export function mergePropertyData(
 
   const comparables: ComparableSale[] = oneroof?.comparables ?? [];
   sources["comparables"] = comparables.length >= 3 ? "oneroof" : "oneroof (limited)";
+
+  const finalVacantSignal =
+    propertyValueConfirmsVacant
+    || /\b(vacant\s+land|bare\s+land|residential\s+section|section)\b/i.test(
+      [property_type, listing_title, listing_url].filter(Boolean).join(" "),
+    );
+  if (
+    finalVacantSignal
+    && final_build_year == null
+    && floor_area_sqm == null
+    && (bedrooms == null || bedrooms === 0)
+  ) {
+    bedrooms = null;
+    bathrooms = null;
+    for (const key of ["bedrooms", "bathrooms"]) delete sources[key];
+    if (!/\b(vacant|section|bare\s+land)\b/i.test(property_type ?? "")) {
+      property_type = "Vacant land / section";
+      sources["property_type"] = "propertyvalue (vacant valuation record)";
+    }
+  }
 
   const missing_critical_fields: string[] = [];
   if (cv_nzd === null)                                                          missing_critical_fields.push("cv_nzd");

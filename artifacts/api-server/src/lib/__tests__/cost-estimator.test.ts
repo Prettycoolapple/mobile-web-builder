@@ -257,6 +257,24 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(c.tdr_ttr_high).toBe(0);
   });
 
+  it("applies the package saving to construction only", () => {
+    const property = minimal({ cv_nzd: 400_000, contour: "flat", floor_area_sqm: null });
+    const standard = estimateCosts(property, 1, { sqm_per_lot: 171 });
+    const packaged = estimateCosts(property, 1, {
+      sqm_per_lot: 171,
+      construction_cost_multiplier: 0.93,
+      construction_discount_reason: "7% coordinated package delivery saving.",
+    });
+
+    expect(packaged.construction_low).toBeCloseTo(standard.construction_low * 0.93, -3);
+    expect(packaged.construction_high).toBeCloseTo(standard.construction_high * 0.93, -3);
+    expect(packaged.land_cv_nzd).toBe(standard.land_cv_nzd);
+    expect(packaged.contributions_low).toBe(standard.contributions_low);
+    expect(packaged.construction_cost_multiplier).toBe(0.93);
+    expect(packaged.construction_discount_reason).toContain("7%");
+    expect(packaged.total_low).toBeLessThan(standard.total_low);
+  });
+
   it("supports provider-specific cost profiles while defaulting to Auckland-equivalent values", () => {
     const property = minimal({
       cv_nzd: 1_000_000,

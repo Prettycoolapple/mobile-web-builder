@@ -1591,6 +1591,7 @@ function streetSegments(streetPart: string): string[] {
 // between the numbers (e.g. "3 lot subdivision at 13 Campbell place") means
 // the second number is not a sibling street address, just incidental prose.
 const NUMBER_GAP_CONNECTOR_RE = /^(?:\s|,|&|\+|\/)+$|^\s*and\s*$/i;
+const NUMBER_RANGE_CONNECTOR_RE = /^\s*[-–—]\s*$/;
 
 function expandStreetSegment(segment: string, suffix: string): string[] {
   const lastNumber = [...segment.matchAll(/\b\d+[a-z]?\b/gi)].pop();
@@ -1607,10 +1608,32 @@ function expandStreetSegment(segment: string, suffix: string): string[] {
     const prev = numberMatches[i - 1];
     const curr = numberMatches[i];
     const gap = numberPart.slice((prev.index ?? 0) + prev[0].length, curr.index ?? 0);
-    if (!NUMBER_GAP_CONNECTOR_RE.test(gap)) return [];
+    if (!NUMBER_GAP_CONNECTOR_RE.test(gap) && !NUMBER_RANGE_CONNECTOR_RE.test(gap)) return [];
   }
 
-  return numberMatches.map((m) => `${m[0]} ${streetTail}${suffix}`.replace(/\s+,/g, ",").trim());
+  let numbers = numberMatches.map((m) => m[0]);
+  if (numberMatches.length === 2) {
+    const gap = numberPart.slice(
+      (numberMatches[0].index ?? 0) + numberMatches[0][0].length,
+      numberMatches[1].index ?? 0,
+    );
+    if (NUMBER_RANGE_CONNECTOR_RE.test(gap)) {
+      const start = Number(numberMatches[0][0]);
+      const end = Number(numberMatches[1][0]);
+      if (
+        Number.isInteger(start)
+        && Number.isInteger(end)
+        && end > start
+        && end - start <= 20
+      ) {
+        const step = start % 2 === end % 2 ? 2 : 1;
+        numbers = [];
+        for (let value = start; value <= end; value += step) numbers.push(String(value));
+      }
+    }
+  }
+
+  return numbers.map((number) => `${number} ${streetTail}${suffix}`.replace(/\s+,/g, ",").trim());
 }
 
 /**
@@ -1696,6 +1719,7 @@ export function addressLineAppearsInText(target: string, haystack: string | null
  * permissive `overlap >= 2` / shared-prefix heuristics.
  */
 export function addressesLikelyMatch(target: string, candidate: string): boolean {
+  if (combinedListingAddressesLikelyMatch(target, candidate)) return true;
   const fa = firstAddressLine(target);
   const fb = firstAddressLine(candidate);
   if (fa.length < 4 || fb.length < 4) return false;
@@ -1710,6 +1734,43 @@ export function addressesLikelyMatch(target: string, candidate: string): boolean
   const [shorter, longer] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
   const longerSet = new Set(longer);
   return shorter.every((w) => longerSet.has(w));
+}
+
+/**
+ * Package-only address matcher. A listing such as "39-43 Auranga Drive" may be
+ * entered as "39-43 Auranga Road"; when both strings independently parse as a
+ * multi-address package, matching the child-number set and the street-name
+ * words is safe while allowing a portal/user street-type discrepancy. This is
+ * deliberately not used for ordinary single-property addresses.
+ */
+export function combinedListingAddressesLikelyMatch(target: string, candidate: string): boolean {
+  const left = extractCombinedListingAddressParts(target);
+  const right = extractCombinedListingAddressParts(candidate);
+  if (!left || !right) return false;
+
+  const numberSet = (parts: CombinedListingAddressParts): string[] =>
+    parts.childAddresses
+      .map((address) => streetNumberToken(firstAddressLine(address)))
+      .filter(Boolean)
+      .sort();
+  const leftNumbers = numberSet(left);
+  const rightNumbers = numberSet(right);
+  if (leftNumbers.length !== rightNumbers.length || leftNumbers.some((value, index) => value !== rightNumbers[index])) {
+    return false;
+  }
+
+  const coreStreetWords = (parts: CombinedListingAddressParts): string[] => {
+    const line = firstAddressLine(parts.childAddresses[0] ?? "");
+    const number = streetNumberToken(line);
+    return streetNameWords(line, number)
+      .filter((word) => !STREET_TYPE_RE.test(word))
+      .sort();
+  };
+  const leftWords = coreStreetWords(left);
+  const rightWords = coreStreetWords(right);
+  return leftWords.length > 0
+    && leftWords.length === rightWords.length
+    && leftWords.every((value, index) => value === rightWords[index]);
 }
 
 type RawListingMatch = {
@@ -2090,8 +2151,10 @@ export async function fetchSupplementListingComparables(opts: {
   landHintSqm?: number | null;
   minTarget: number;
   maxResults: number;
+  /** Vacant-site exits must be completed homes, not bare-land asking prices. */
+  requireImprovedDwelling?: boolean;
 }): Promise<ComparableSale[]> {
-  const { suburbName, excludeAddress, priceHintNzd, landHintSqm, minTarget, maxResults } = opts;
+  const { suburbName, excludeAddress, priceHintNzd, landHintSqm, minTarget, maxResults, requireImprovedDwelling } = opts;
   if (!suburbName.trim()) return [];
 
   const suburb = await findSuburbId(suburbName);
@@ -2112,6 +2175,17 @@ export async function fetchSupplementListingComparables(opts: {
   let pool = listings.filter(
     (l) => l.price != null && l.price > 100_000 && l.address && l.address.length > 8,
   );
+  if (requireImprovedDwelling) {
+    pool = pool.filter((listing) => {
+      const typeText = [listing.propertyType, listing.listingCategory, listing.listingTitle]
+        .filter(Boolean)
+        .join(" ");
+      if (/\b(section|vacant\s+land|bare\s+land|residential\s+land)\b/i.test(typeText)) return false;
+      return (listing.bedrooms ?? 0) > 0
+        || (listing.floorArea ?? 0) >= 50
+        || /\b(house|home|dwelling|townhouse|terrace|unit|apartment)\b/i.test(typeText);
+    });
+  }
   if (exKey) {
     pool = pool.filter((l) => {
       const k = addressKey(l.address);

@@ -12,6 +12,8 @@ export interface ComparableSale {
   cv_nzd: number | null;
   /** Build year from AC GIS or scraper — null if unavailable */
   build_year: number | null;
+  bedrooms?: number | null;
+  propertyImprovement?: "improved_dwelling" | "vacant_land" | "unknown";
   typology?: ComparableTypology;
   distanceM?: number | null;
   source?: ComparableSource;
@@ -56,6 +58,10 @@ function mapScrapedToComparable(c: ScrapedComparable, source: ComparableSource):
     price_per_sqm: priceNzd > 0 && floorSqm > 0 ? Math.round(priceNzd / floorSqm) : 0,
     cv_nzd: null,
     build_year: null,
+    ...(c.bedrooms != null ? { bedrooms: c.bedrooms } : {}),
+    ...(floorSqm >= 50 || (c.bedrooms ?? 0) > 0
+      ? { propertyImprovement: "improved_dwelling" as const }
+      : {}),
     typology: inferComparableTypology({ address: addr, land_sqm: landSqm, floor_sqm: floorSqm, bedrooms: c.bedrooms ?? null }),
     source,
   };

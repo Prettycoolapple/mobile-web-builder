@@ -585,8 +585,8 @@ describe("development strategies", () => {
     const refurbish = strategies.find((strategy) => strategy.id === "refurbish");
     const rebuild = strategies.find((strategy) => strategy.id === "demolish_rebuild");
 
-    expect(hold?.recommendation).toBe("not_recommended");
-    expect(refurbish?.recommendation).toBe("not_recommended");
+    expect(hold).toBeUndefined();
+    expect(refurbish).toBeUndefined();
     expect(rebuild?.recommendation).toBe("recommended");
     expect(rebuild?.title).toBe("Build new dwelling(s)");
     expect(rebuild?.costItems.some((item) => item.label === "Demolition")).toBe(false);

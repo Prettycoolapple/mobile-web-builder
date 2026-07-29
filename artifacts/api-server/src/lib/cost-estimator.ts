@@ -36,6 +36,9 @@ export interface CostBreakdown {
   land_rate_high: number;
   construction_low: number;
   construction_high: number;
+  /** 1 for normal delivery; 0.93 for the supported adjoining package model. */
+  construction_cost_multiplier?: number;
+  construction_discount_reason?: string | null;
   consents_low: number;
   consents_high: number;
   finance_low: number;
@@ -65,6 +68,9 @@ export interface EstimateCostsOptions {
    * differs materially from the existing house.
    */
   sqm_per_lot?: number | null;
+  /** Applies only to construction, before downstream percentage allowances. */
+  construction_cost_multiplier?: number | null;
+  construction_discount_reason?: string | null;
 }
 
 /**
@@ -322,8 +328,12 @@ export function estimateCosts(
     costProfile,
   );
 
-  const construction_low  = rate_low  * floorSqm * safeUnits;
-  const construction_high = rate_high * floorSqm * safeUnits;
+  const constructionCostMultiplier =
+    options?.construction_cost_multiplier != null && Number.isFinite(options.construction_cost_multiplier)
+      ? Math.max(0.5, Math.min(1, options.construction_cost_multiplier))
+      : 1;
+  const construction_low  = rate_low  * floorSqm * safeUnits * constructionCostMultiplier;
+  const construction_high = rate_high * floorSqm * safeUnits * constructionCostMultiplier;
 
   const consents_low  = construction_low  * costProfile.consents.lowRate;
   const consents_high = construction_high * costProfile.consents.highRate;
@@ -382,6 +392,9 @@ export function estimateCosts(
     land_rate_high:     r(land_rate_high),
     construction_low:  r(construction_low),
     construction_high: r(construction_high),
+    construction_cost_multiplier: constructionCostMultiplier,
+    construction_discount_reason:
+      constructionCostMultiplier < 1 ? options?.construction_discount_reason ?? null : null,
     consents_low:      r(consents_low),
     consents_high:     r(consents_high),
     finance_low:       r(finance_low),

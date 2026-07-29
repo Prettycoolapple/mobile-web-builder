@@ -350,7 +350,13 @@ function costItemsForStrategy(id: DevelopmentStrategyId, costs: CostBreakdown): 
   if (id === "demolish_rebuild" || id === "integrated_consent") {
     items.push(
       { label: "Demolition", low: costs.demo_low, high: costs.demo_high },
-      { label: "Construction", low: costs.construction_low, high: costs.construction_high },
+      {
+        label: (costs.construction_cost_multiplier ?? 1) < 1
+          ? "Construction (package saving applied)"
+          : "Construction",
+        low: costs.construction_low,
+        high: costs.construction_high,
+      },
       { label: "Retaining Walls", low: costs.retaining_low, high: costs.retaining_high },
       { label: "TDR/TTR transfer right", low: costs.tdr_ttr_low, high: costs.tdr_ttr_high },
       { label: "Services & Infrastructure", low: costs.services_low, high: costs.services_high },
@@ -493,6 +499,12 @@ function buildAssumptions(
     assumptions.push(
       `${n} potential lot${n === 1 ? "" : "s"} / new dwelling${n === 1 ? "" : "s"} modelled; construction, consents, finance, and contingency scale with the dwelling count.`,
     );
+    if (data.package_development_context) {
+      const packageContext = data.package_development_context;
+      assumptions.push(
+        `${packageContext.constructionDiscountPercent}% construction saving applied for coordinated delivery across ${packageContext.siteCount} adjoining package sites. The package also requires higher upfront acquisition capital and coordinated consenting, servicing, and programme management.`,
+      );
+    }
     if (data.zone_code && ["CLZ", "LLRZ", "RCSZ", "RUR"].includes(data.zone_code.toUpperCase()) && n > 1) {
       assumptions.push("Rural/countryside title creation may require a transferable rural site right (TDR/TTR); allowance is included for each additional title and must be confirmed at resource consent stage.");
     }
@@ -612,8 +624,12 @@ export function calculateDevelopmentStrategies(params: {
       : rebuildGdvPerLotBeforeFloor;
 
   const rows: Array<{ id: DevelopmentStrategyId; costs: CostBreakdown; gdv: number; units: number; sqmPerLot: number; gdvPerLot: number }> = [
-    { id: "hold_existing", costs: holdCosts, gdv: existingValue, units: 1, sqmPerLot: data.land_area_sqm ?? lotResult.sqm_per_lot, gdvPerLot: existingValue },
-    { id: "refurbish", costs: refurbCosts, gdv: refurbValue, units: 1, sqmPerLot: data.land_area_sqm ?? lotResult.sqm_per_lot, gdvPerLot: refurbValue },
+    ...(hasDwelling
+      ? [
+          { id: "hold_existing" as const, costs: holdCosts, gdv: existingValue, units: 1, sqmPerLot: data.land_area_sqm ?? lotResult.sqm_per_lot, gdvPerLot: existingValue },
+          { id: "refurbish" as const, costs: refurbCosts, gdv: refurbValue, units: 1, sqmPerLot: data.land_area_sqm ?? lotResult.sqm_per_lot, gdvPerLot: refurbValue },
+        ]
+      : []),
     { id: "demolish_rebuild", costs: rebuildCosts, gdv: rebuildValue, units: lotResult.lots, sqmPerLot: lotResult.sqm_per_lot, gdvPerLot: rebuildGdvPerLot },
   ];
   if (subdivisionAssessment?.designLedEligible && subdivisionAssessment.designLedYieldRange) {
@@ -622,6 +638,8 @@ export function calculateDevelopmentStrategies(params: {
     const designCosts = estimateCosts(data, designUnits, {
       market_floor_price_per_sqm: avgPricePerSqm > 0 ? avgPricePerSqm : null,
       sqm_per_lot: designSqmPerLot,
+      construction_cost_multiplier: baseCosts.construction_cost_multiplier,
+      construction_discount_reason: baseCosts.construction_discount_reason,
     });
     const designGdvPerLot = hasComparablePricing
       ? r(estimateGdvPerLot(avgPricePerSqm, avgSalePrice, designSqmPerLot) * exitTypologyMultiplier * marketGdvMultiplier)

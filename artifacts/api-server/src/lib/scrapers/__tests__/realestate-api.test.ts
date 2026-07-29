@@ -3,6 +3,7 @@ import {
   _resetSuburbIndexCacheForTests,
   addressLineAppearsInText,
   addressesLikelyMatch,
+  combinedListingAddressesLikelyMatch,
   extractCombinedListingAddressParts,
   extractListingFactAreaSqm,
   fetchRealestatePropertyProfileForAddress,
@@ -291,6 +292,36 @@ describe("realestate-api combined listing detection", () => {
         "17 Fisherton Street, Grey Lynn",
       ],
     });
+  });
+
+  it("expands an odd-number street range into each adjoining parcel", () => {
+    expect(extractCombinedListingAddressParts("39-43 Auranga Drive, Karaka")).toEqual({
+      packageAddress: "39-43 Auranga Drive, Karaka",
+      childAddresses: [
+        "39 Auranga Drive, Karaka",
+        "41 Auranga Drive, Karaka",
+        "43 Auranga Drive, Karaka",
+      ],
+    });
+  });
+
+  it("preserves an explicitly hyphenated sequence of package addresses", () => {
+    expect(extractCombinedListingAddressParts("39-41-43 Auranga Drive, Drury")).toEqual({
+      packageAddress: "39-41-43 Auranga Drive, Drury",
+      childAddresses: [
+        "39 Auranga Drive, Drury",
+        "41 Auranga Drive, Drury",
+        "43 Auranga Drive, Drury",
+      ],
+    });
+  });
+
+  it("matches a package street-type typo without weakening single-address matching", () => {
+    expect(combinedListingAddressesLikelyMatch(
+      "39-43 Auranga Road, Karaka",
+      "39 - 43 Auranga Drive, Karaka",
+    )).toBe(true);
+    expect(addressesLikelyMatch("43 Auranga Road, Karaka", "43 Auranga Drive, Karaka")).toBe(false);
   });
 
   it("expands comma-separated shared-street package numbers", () => {

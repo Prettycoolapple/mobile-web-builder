@@ -50,11 +50,23 @@ export function classifySiteCondition(data: SiteConditionInput): SiteCondition {
     (floor != null && floor >= 30) ||
     bedrooms != null ||
     bathrooms != null;
+  const hasStrongPhysicalDwellingSignal =
+    data.build_year != null ||
+    (floor != null && floor >= 30) ||
+    bedrooms != null;
 
   if (data.build_year != null) evidence.push(`build year ${data.build_year}`);
   if (floor != null && floor >= 30) evidence.push(`floor area ${Math.round(floor)}sqm`);
   if (bedrooms != null) evidence.push(`${bedrooms} bedroom${bedrooms === 1 ? "" : "s"}`);
   if (bathrooms != null) evidence.push(`${bathrooms} bathroom${bathrooms === 1 ? "" : "s"}`);
+
+  // A lone bathroom count is a known rating-feed artefact on some vacant
+  // sections. Explicit land-only classification wins unless a stronger
+  // structure signal (year, floor area, or bedroom) is also present.
+  if (hasVacantLandTextSignal(text) && !hasStrongPhysicalDwellingSignal) {
+    evidence.push(`land-only signal ${data.property_type ?? data.listing_title ?? data.listing_url ?? "listing"}`);
+    return { siteStatus: "vacant_land", hasExistingDwelling: false, evidence };
+  }
 
   if (hasPhysicalDwellingSignal) {
     return { siteStatus: "has_dwelling", hasExistingDwelling: true, evidence };

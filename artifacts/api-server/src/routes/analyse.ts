@@ -23,11 +23,13 @@ import {
   detectFilterSpecFromText,
   Message,
   type ChatIntent,
+  classifyCombinedListingPackage,
 } from "../lib/claude";
 import { signToken, verifyActiveToken } from "../lib/auth";
 import { extractNZAddress } from "../lib/address-parser";
 import {
   extractCombinedListingAddressParts,
+  fetchRealestateListingForAddress,
   fetchRealestateAgentForListingUrl,
   fetchRealestateListingByUrl,
   findSuburbInTextViaIndex,
@@ -3948,9 +3950,53 @@ function addressPromptForUnresolvedUrl(locale: ReturnType<typeof normaliseLocale
     : "I could not identify a property address from that link. Please paste the full street address, or send a valid realestate.co.nz property listing link.";
 }
 
-function resolveCombinedPackage(raw: string): { packageAddress: string; childAddresses: string[] } | null {
+async function resolveCombinedPackage(raw: string): Promise<{
+  packageAddress: string;
+  childAddresses: string[];
+  listingUrl?: string | null;
+} | null> {
   const parsed = extractCombinedListingAddressParts(raw);
   if (!parsed) return null;
+  const hasRangeSyntax = /\b\d+[a-z]?\s*[-–—]\s*\d+[a-z]?\b/i.test(parsed.packageAddress);
+  const suburb = await findSuburbInTextViaIndex(raw).catch(() => null);
+  const activeListing = suburb
+    ? await fetchRealestateListingForAddress(parsed.packageAddress, suburb.title).catch(() => null)
+    : null;
+  const canonicalParts = activeListing?.address
+    ? extractCombinedListingAddressParts(activeListing.address)
+    : null;
+
+  if (activeListing && canonicalParts) {
+    const classification = await classifyCombinedListingPackage({
+      requestedAddress: parsed.packageAddress,
+      listingAddress: activeListing.address,
+      listingTitle: activeListing.listingTitle,
+      description: activeListing.description,
+      propertyType: activeListing.propertyType,
+      childAddresses: canonicalParts.childAddresses,
+    });
+    if (classification.isPackage && classification.confidence >= 0.6) {
+      logger.info(
+        {
+          requestedPackage: parsed.packageAddress,
+          canonicalPackage: canonicalParts.packageAddress,
+          childAddresses: canonicalParts.childAddresses,
+          reason: classification.reason,
+        },
+        "Confirmed combined listing package from active listing context",
+      );
+      return {
+        packageAddress: canonicalParts.packageAddress,
+        childAddresses: canonicalParts.childAddresses.slice(0, 10),
+        listingUrl: activeListing.listingUrl,
+      };
+    }
+  }
+
+  // Explicit comma/and/& address lists retain the established offline path.
+  // A bare numeric range is ambiguous (it may be one building), so it must be
+  // corroborated by an active listing before launching multiple reports.
+  if (hasRangeSyntax) return null;
   const maxChildren = 10;
   if (parsed.childAddresses.length > maxChildren) {
     logger.warn(
@@ -3961,6 +4007,7 @@ function resolveCombinedPackage(raw: string): { packageAddress: string; childAdd
   return {
     packageAddress: parsed.packageAddress,
     childAddresses: parsed.childAddresses.slice(0, maxChildren),
+    listingUrl: activeListing?.listingUrl ?? null,
   };
 }
 
@@ -4138,7 +4185,7 @@ ${blocks}${failuresBlock}
 Write a JSON object with these exact fields:
 
 {
-  "summary": "2-4 sentences. Explain the combined investment thesis: why these two titles together create (or do not create) a stronger play than either alone — think site assembly, joint subdivision, shared services, scale, holding cost. Reference each property by its actual street number. Be honest if the package is just two unrelated houses sold together.",
+  "summary": "2-4 sentences. Explain the combined investment thesis: why these titles together create (or do not create) a stronger play than any one title alone — think site assembly, joint subdivision, shared services, scale, holding cost. Reference each property by its actual street number.",
   "subdivisionView": [
     // One bullet per property, naming the property and stating its subdivision potential. Then one extra bullet covering whether COMBINING the titles unlocks more lots / a different pathway than the sum of the parts (e.g. boundary adjustment, joint resource consent, shared access lot).
   ],
@@ -4155,6 +4202,8 @@ Critical rules:
 - ${localeInstruction}
 - Never aggregate land area, bedrooms, bathrooms, or CV across properties — refer to them per-address.
 - If a value is missing for a property, say so explicitly (e.g. "build year not confirmed for 7 Stanmore Road").
+- A 7% saving has already been applied to each child report's CONSTRUCTION component for coordinated package delivery. Mention the shared mobilisation/site-work efficiency and the countervailing higher upfront acquisition capital; do not apply or invent another discount.
+- For vacant sections, exit pricing represents completed new house-and-land product, not resale of bare land.
 - Do not invent numbers. Use only what is in the per-property data above.
 - Reply with ONLY the JSON object — no markdown, no preamble.`;
 
@@ -4223,7 +4272,7 @@ async function buildCombinedReportGroup(args: {
   );
 
   const deterministicComparison: CombinedReportGroup["comparison"] = {
-    summary: `This appears to be a combined listing package. Each address has been analysed separately so land area, title, services, zoning and return assumptions stay tied to the correct property.`,
+    summary: `This is a combined listing package. Each address has been analysed separately so land area, title, services, zoning and return assumptions stay tied to the correct property. A 7% coordinated-delivery saving is applied to construction only; the package still requires higher upfront acquisition capital.`,
     subdivisionView: reportSummaries.map((r) =>
       `${r.address}: ${r.lots != null ? `${r.lots} potential lot${r.lots === 1 ? "" : "s"} indicated by the individual report` : "subdivision yield is not confirmed in the individual report"}.`,
     ),
@@ -4233,6 +4282,7 @@ async function buildCombinedReportGroup(args: {
     risks: [
       "Do not add the package land area to one address unless a planner or surveyor confirms the legal titles and sale structure.",
       "Treat shared driveways, services, easements and access as package-level due diligence items.",
+      "The 7% construction saving assumes coordinated mobilisation and nearby site works; confirm it with a quantity surveyor and allow for higher package-level capital and programme exposure.",
       ...args.failures.map((f) => `${f.address}: report generation failed (${f.error}).`),
     ],
     recommendedNextStep: bestByLots
@@ -4259,6 +4309,7 @@ async function buildCombinedReportGroup(args: {
 
   const warnings = [
     "Combined listing facts are shown as listing context only. They are not used as verified facts for any one child property.",
+    "A 7% coordinated package saving is applied to construction only; land, contributions and other costs are not discounted.",
   ];
   // The LLM is already prompted to emit text in the target locale (and to
   // preserve English addresses) so we only run the legacy translation step
@@ -4352,6 +4403,10 @@ async function runFeasibilityAnalyseCore(args: {
   log: FeasibilityLog;
   notifyWhenReady?: boolean;
   geocodeFallbackAddress?: string | null;
+  packageDevelopment?: {
+    siteCount: number;
+    constructionDiscountPercent: number;
+  } | null;
 }): Promise<{
   report: Record<string, unknown>;
   savedSearchId: string | null;
@@ -4386,6 +4441,7 @@ async function runFeasibilityAnalyseCore(args: {
     cachedRaw: cachedEntry?.rawData ?? null,
     cachedRawAcquiredAt: cachedEntry ? new Date(cachedEntry.row.lastRefreshedAt as unknown as string | Date).toISOString() : null,
     geocodeFallbackAddress,
+    packageDevelopment: args.packageDevelopment ?? null,
   }).catch((err) => {
     log.warn({ err }, "Pipeline failed during feasibility core — falling back to LLM-only report");
     return null;
@@ -4406,6 +4462,7 @@ async function runFeasibilityAnalyseCore(args: {
       selectedListingContext: selectedContext,
       cachedRaw: null,
       geocodeFallbackAddress,
+      packageDevelopment: args.packageDevelopment ?? null,
     }).catch((err) => {
       log.warn({ err }, "Forced live re-acquisition failed — keeping cached-data result");
       return null;
@@ -4591,6 +4648,10 @@ async function runCombinedFeasibilityGroupCore(args: {
             },
             userId: null,
             log: args.log,
+            packageDevelopment: {
+              siteCount: args.childAddresses.length,
+              constructionDiscountPercent: 7,
+            },
           });
           break;
         } catch (err) {
@@ -4679,7 +4740,9 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
   try {
     const conv = (job.conversationHistory as Array<{ role: "user" | "assistant"; content: string }> | null) ?? [];
     const locale = (job.locale === "zh" ? "zh" : "en") as ReturnType<typeof normaliseLocale>;
-    const combinedPackage = resolveCombinedPackage(job.queryAddress) ?? resolveCombinedPackage(job.analysisAddress);
+    const combinedPackage =
+      await resolveCombinedPackage(job.queryAddress)
+      ?? await resolveCombinedPackage(job.analysisAddress);
     const result = combinedPackage
       ? await runCombinedFeasibilityGroupCore({
           packageAddress: combinedPackage.packageAddress,
@@ -4689,6 +4752,7 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
           conversationHistory: conv,
           userId: job.userId,
           log,
+          selectedListingUrl: combinedPackage.listingUrl ?? null,
         })
       : await runFeasibilityAnalyseCore({
           address: job.queryAddress,
@@ -4988,7 +5052,7 @@ router.post(
   }
 
   try {
-    const combinedPackage = resolveCombinedPackage(address);
+    const combinedPackage = await resolveCombinedPackage(address);
     if (combinedPackage) {
       const translateTitleSchool = translateTitleSchoolFromReq(
         { headers: req.headers as Record<string, string | string[] | undefined> },
@@ -5041,7 +5105,11 @@ router.post(
         conversationHistory: conversationHistory || [],
         userId,
         log: req.log,
-        selectedListingUrl: normalisedSelectedListingContext?.listingUrl ?? selectedListingUrl ?? null,
+        selectedListingUrl:
+          combinedPackage.listingUrl
+          ?? normalisedSelectedListingContext?.listingUrl
+          ?? selectedListingUrl
+          ?? null,
       });
       res.json({
         reportGroup: result.reportGroup,
@@ -8173,7 +8241,7 @@ router.post(
       }
 
       if (effectiveMode === "analyse") {
-        const explicitCombinedPackage = resolveCombinedPackage(userText);
+        const explicitCombinedPackage = await resolveCombinedPackage(userText);
         if (explicitCombinedPackage) {
           req.log.info(
             { packageAddress: explicitCombinedPackage.packageAddress, childAddresses: explicitCombinedPackage.childAddresses },
@@ -8207,6 +8275,7 @@ router.post(
               conversationHistory: messages,
               userId: chatUserId,
               log: req.log,
+              selectedListingUrl: explicitCombinedPackage.listingUrl ?? null,
             });
             const translatedContent = await translateChatContent(
               JSON.stringify(result.reportGroup),

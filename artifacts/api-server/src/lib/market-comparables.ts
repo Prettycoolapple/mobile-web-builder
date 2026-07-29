@@ -43,6 +43,14 @@ export function targetExitTypology(lots: number, sqmPerLot: number): ComparableT
   return "standalone";
 }
 
+export function isImprovedDwellingComparable(c: ComparableSale): boolean {
+  if (c.propertyImprovement === "improved_dwelling") return true;
+  if (c.propertyImprovement === "vacant_land") return false;
+  return (c.floor_sqm ?? 0) >= 50
+    || (c.bedrooms ?? 0) > 0
+    || (c.build_year != null && c.build_year >= 1800);
+}
+
 function scoreComparable(c: ComparableSale, target: ComparableTypology, subjectLandSqm: number | null): number {
   let score = 50;
   if (c.typology === target) score += 35;
@@ -75,14 +83,20 @@ export function selectComparableSalesForExit(params: {
   sqmPerLot: number;
   subjectLandSqm?: number | null;
   maxSelect?: number;
+  /** For a vacant-site new-build exit, exclude section/land-only transactions. */
+  requireImprovedDwelling?: boolean;
 }): ComparableSelectionResult {
   const targetTypology = targetExitTypology(params.lots, params.sqmPerLot);
   const maxSelect = params.maxSelect ?? 3;
-  const withScores = params.comparables.map((c) => {
+  const eligibleComparables = params.requireImprovedDwelling
+    ? params.comparables.filter(isImprovedDwellingComparable)
+    : params.comparables;
+  const withScores = eligibleComparables.map((c) => {
     const typology = c.typology ?? inferComparableTypology({
       address: c.address,
       land_sqm: c.land_sqm,
       floor_sqm: c.floor_sqm,
+      bedrooms: c.bedrooms,
     });
     const relevanceScore = scoreComparable({ ...c, typology }, targetTypology, params.subjectLandSqm ?? null);
     return {

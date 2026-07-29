@@ -61,4 +61,25 @@ describe("market comparable selection", () => {
     expect(result.typologyMatched).toBe(false);
     expect(result.comparables).toHaveLength(3);
   });
+
+  it("excludes bare-land sales from a vacant site's completed-home exit", () => {
+    const landOnly = {
+      ...comp("39 Empty Drive", 171, 0, 400_000),
+      build_year: null,
+      bedrooms: null,
+      propertyImprovement: "vacant_land" as const,
+    };
+    const improved = comp("8 Completed Lane", 180, 135, 990_000);
+    const result = selectComparableSalesForExit({
+      lots: 1,
+      sqmPerLot: 171,
+      subjectLandSqm: 171,
+      comparables: [landOnly, improved],
+      requireImprovedDwelling: true,
+    });
+
+    expect(result.comparables).toHaveLength(1);
+    expect(result.comparables[0]?.address).toBe("8 Completed Lane");
+    expect(result.comparables[0]?.price_nzd).toBe(990_000);
+  });
 });
