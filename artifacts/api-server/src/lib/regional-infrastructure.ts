@@ -101,6 +101,8 @@ const TAURANGA_STORMWATER =
   "https://gis.tauranga.govt.nz/server/rest/services/Stormwater_Common_Mapservices/MapServer";
 const NAPIER_THREE_WATERS =
   "https://services3.arcgis.com/N69BvCUwqSCkbIQF/ArcGIS/rest/services/717214_Napier_City_Council_layers/FeatureServer";
+const HASTINGS_THREE_WATERS =
+  "https://gismaps.hdc.govt.nz/server/rest/services/3Waters/3WatersAssets/MapServer";
 const SOUTHLAND_THREE_WATERS =
   "https://gis.southlanddc.govt.nz/server/rest/services/External_ThreeWaters_Layers_v2/MapServer";
 const WAIRARAPA_WATER =
@@ -282,6 +284,23 @@ const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfras
     ]),
     group("Stormwater", NAPIER_THREE_WATERS, "Napier City Council", [
       [6, "Stormwater pipe or inlet lead"],
+    ], 1000),
+  ],
+  hastings: [
+    group("Water Supply", HASTINGS_THREE_WATERS, "Hastings District Council", [
+      [2, "Public potable-water node", "IPS_Ownership = 'PUB' AND IPS_Service_Status = 'INS'"],
+      [3, "Public potable-water main", "IPS_Ownership = 'PUB' AND IPS_Service_Status = 'INS'"],
+      [4, "Public potable-water service line", "IPS_Ownership = 'PUB' AND IPS_Service_Status = 'INS'"],
+    ]),
+    group("Wastewater", HASTINGS_THREE_WATERS, "Hastings District Council", [
+      [11, "Public wastewater node", "IPS_Ownership = 'PUB' AND IPS_Service_Status = 'INS'"],
+      [12, "Public wastewater main", "IPS_Ownership = 'PUB' AND IPS_Service_Status = 'INS'"],
+      [13, "Public wastewater service line", "IPS_Ownership = 'PUB' AND IPS_Service_Status = 'INS'"],
+    ]),
+    group("Stormwater", HASTINGS_THREE_WATERS, "Hastings District Council", [
+      [20, "Public stormwater node", "IPS_Ownership = 'PUB' AND IPS_Service_Status = 'INS'"],
+      [32, "Public stormwater main", "IPS_Ownership = 'PUB' AND IPS_Service_Status = 'INS'"],
+      [22, "Public stormwater service line", "IPS_Ownership = 'PUB' AND IPS_Service_Status = 'INS'"],
     ], 1000),
   ],
   whakatane: [

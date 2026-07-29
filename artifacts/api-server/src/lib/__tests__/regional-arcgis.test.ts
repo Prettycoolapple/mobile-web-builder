@@ -470,6 +470,48 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(overlays[0]?.detail).toContain("Confirm implications in the local district plan");
   });
 
+  it("maps the Hastings zone and only returned controls or hazards", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/OpenData_OperativeDistrictPlan_Zones/FeatureServer/39/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: {
+          Zone: "Hastings General Residential",
+          ReviewZone: "General Residential",
+          Location: "Hastings",
+        } }] }), { status: 200 });
+      }
+      if (url.includes("/HBRC_Property_Hazards/MapServer/16/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: {
+          F3604_haza: "Medium",
+          Hazard_Description: "Medium liquefaction vulnerability",
+        } }] }), { status: 200 });
+      }
+      if (url.includes("/HBRC_Property_Hazards/MapServer/24/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: {
+          Location: "Heretaunga Plains",
+          Class: "Low flood risk",
+        } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ features: [], fields: [] }), { status: 200 });
+    }));
+
+    await expect(fetchRegionalPlanningZone(
+      jurisdiction("hastings"), -39.65520308, 176.85964827,
+    )).resolves.toMatchObject({
+      zone_code: "Hastings General Residential",
+      zone_description: expect.stringContaining("General Residential"),
+    });
+
+    const overlays = await fetchRegionalPlanningOverlays(
+      jurisdiction("hastings"), -39.65520308, 176.85964827, null,
+    );
+    expect(overlays).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "Liquefaction Vulnerability", status: "restricted" }),
+      expect.objectContaining({ name: "Flood Risk Area", detail: expect.stringContaining("Low flood risk") }),
+    ]));
+    expect(overlays.some((item) => item.name === "Heritage Feature")).toBe(false);
+  });
+
   it("maps Tauranga's operative MDRZ and applicable Mount Maunganui controls", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

@@ -14,6 +14,8 @@ const WESTERN_BAY_PROPERTY =
 const PNCC_PROPERTY_VALUATION =
   "https://services.arcgis.com/Fv0Tvc98QEDvQyjL/arcgis/rest/services/PROPERTY_PARCEL_VALUATION_VIEW/FeatureServer/0";
 const NAPIER_PROPERTY_WFS = "https://data.napier.govt.nz/geo/ows";
+const HASTINGS_PROPERTY =
+  "https://gismaps.hdc.govt.nz/server/rest/services/Property/Property_Data/MapServer/0";
 const TAURANGA_ASSESSMENT =
   "https://gis.tauranga.govt.nz/server/rest/services/Assessment/FeatureServer/2";
 const TAURANGA_CAPITAL_VALUE =
@@ -545,6 +547,68 @@ async function fetchNapierPropertyHistory(
   }
 }
 
+async function fetchHastingsPropertyHistory(
+  address: string,
+  lat: number,
+  lng: number,
+  linzAreaSqm?: number | null,
+): Promise<PropertyHistory> {
+  try {
+    const url = new URL(`${HASTINGS_PROPERTY}/query`);
+    url.searchParams.set("f", "json");
+    url.searchParams.set("where", "1=1");
+    url.searchParams.set("geometry", `${lng},${lat}`);
+    url.searchParams.set("geometryType", "esriGeometryPoint");
+    url.searchParams.set("inSR", "4326");
+    url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
+    url.searchParams.set(
+      "outFields",
+      "PropertyNo,PR_address,RT_assessment_no,VAL_area,PR_cert_of_title,RT_override_legal,OperativeDPZone,Shape_Area",
+    );
+    url.searchParams.set("returnGeometry", "false");
+
+    const response = await fetch(url.toString(), { signal: AbortSignal.timeout(12_000) });
+    if (!response.ok) throw new Error(`Hastings property lookup HTTP ${response.status}`);
+    const data = await response.json() as {
+      features?: ArcGisFeature[];
+      error?: { message?: string };
+    };
+    if (data.error) throw new Error(`Hastings property lookup error: ${data.error.message ?? "unknown"}`);
+
+    const requestedStreet = normaliseStreetAddress(streetAddressPart(address));
+    const feature = (data.features ?? []).find((candidate) => {
+      const candidateAddress = normaliseStreetAddress(String(candidate.attributes?.["PR_address"] ?? ""));
+      return candidateAddress === requestedStreet || candidateAddress.startsWith(`${requestedStreet} `);
+    });
+    if (!feature?.attributes) return emptyPropertyHistory(linzAreaSqm);
+
+    const hectares = Number(feature.attributes["VAL_area"]);
+    const councilAreaSqm = Number.isFinite(hectares) && hectares > 0
+      ? Math.round(hectares * 10_000)
+      : positiveNumber(feature.attributes["Shape_Area"]);
+    const landAreaSqm = positiveNumber(linzAreaSqm) ?? councilAreaSqm;
+
+    return {
+      cv_nzd: null,
+      cv_year: null,
+      build_year: null,
+      floor_area_sqm: null,
+      land_area_sqm: landAreaSqm,
+      land_area_source: linzAreaSqm ? "linz" : "hastings_council_property_gis",
+      land_area_scope: "rating_unit",
+      property_type: null,
+      sources_confirmed: landAreaSqm
+        ? [linzAreaSqm
+          ? "land_area_sqm (from LINZ parcel)"
+          : "land_area_sqm (Hastings District Council rating-unit GIS)"]
+        : [],
+      sources_estimated: ["cv_nzd", "build_year", "floor_area_sqm", "property_type"],
+    };
+  } catch {
+    return emptyPropertyHistory(linzAreaSqm);
+  }
+}
+
 async function queryTaurangaLayer(
   layerUrl: string,
   params: Record<string, string>,
@@ -838,6 +902,7 @@ export async function fetchRegionalPropertyHistory(
   if (providerId === "tauranga") return fetchTaurangaPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId === "kapiti") return fetchKapitiPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId === "napier") return fetchNapierPropertyHistory(address, lat, lng, linzAreaSqm);
+  if (providerId === "hastings") return fetchHastingsPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId !== "whakatane") return emptyPropertyHistory(linzAreaSqm);
 
   const url = new URL(`${WHAKATANE_PROPERTY}/query`);

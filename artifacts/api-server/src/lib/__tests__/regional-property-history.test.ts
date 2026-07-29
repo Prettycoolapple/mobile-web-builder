@@ -471,6 +471,38 @@ describe("regional property history", () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("typeNames=NCC%3ANCS_PROPADDRESS");
   });
 
+  it("uses the exact Hastings rating unit for 226 Havelock Road", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify({
+      features: [
+        { attributes: { PR_address: "224 Havelock Road HAVELOCK NORTH 4130", VAL_area: 0.0800 } },
+        {
+          attributes: {
+            PR_address: "226 Havelock Road HAVELOCK NORTH 4130",
+            PropertyNo: 55494,
+            RT_assessment_no: "1026169500",
+            VAL_area: 2.9483,
+            PR_cert_of_title: "1237991",
+            OperativeDPZone: "Hastings General Residential",
+          },
+        },
+      ],
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchRegionalPropertyHistory(
+      "hastings",
+      "226 Havelock Road, Akina, Hastings",
+      -39.65520308,
+      176.85964827,
+    )).resolves.toMatchObject({
+      land_area_sqm: 29_483,
+      land_area_source: "hastings_council_property_gis",
+      land_area_scope: "rating_unit",
+      cv_nzd: null,
+    });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/Property/Property_Data/MapServer/0/query");
+  });
+
   it("uses Tauranga's exact assessment and 2023 valuation records", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

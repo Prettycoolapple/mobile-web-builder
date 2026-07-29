@@ -365,6 +365,11 @@ describe("estimateCosts — existing dwelling / demolition", () => {
       providerId: "napier",
       source: "auckland_default_pending_regional_rates",
     });
+    expect(regionalCostProfileForProvider("hastings")).toMatchObject({
+      id: "hastings-default",
+      providerId: "hastings",
+      source: "auckland_default_pending_regional_rates",
+    });
     expect(regionalCostProfileForProvider("southland")).toMatchObject({
       id: "southland-default",
       providerId: "southland",

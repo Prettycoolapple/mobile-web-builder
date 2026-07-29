@@ -307,6 +307,42 @@ describe("developmentScoreUnavailableReason", () => {
     expect(developmentScoreUnavailableReason(property, actualCosts, actualScenarios)).toBeNull();
   });
 
+  it("produces Hastings costs, ROI, and every score on the five-point scale", () => {
+    const property = merged({
+      cv_nzd: 3_900_000,
+      land_area_sqm: 29_483,
+      floor_area_sqm: 371,
+      build_year: null,
+      bedrooms: null,
+      bathrooms: 2,
+      zone_code: "HDC_GENERAL_RESIDENTIAL",
+      zone_description: "Hastings General Residential",
+      contour: "flat",
+      overlays: [{ name: "Flood Risk Area", status: "moderate", detail: "Low risk areas" }],
+      infrastructure: [
+        { name: "Water Supply", location: "boundary", risk: "low", distance_metres: 31, estimated_cost_low: 5_000, estimated_cost_high: 20_000, note: "Mapped public pipe" },
+        { name: "Wastewater", location: "public-land", risk: "moderate", distance_metres: 128, estimated_cost_low: 10_000, estimated_cost_high: 40_000, note: "Mapped public pipe" },
+        { name: "Stormwater", location: "boundary", risk: "low", distance_metres: 33, estimated_cost_low: 5_000, estimated_cost_high: 20_000, note: "Mapped public pipe" },
+      ],
+      estate_type: "Fee Simple",
+    });
+    const profile = regionalCostProfileForProvider("hastings");
+    const actualCosts = estimateCosts(property, 20, { sqm_per_lot: 1_474, cost_profile: profile });
+    const actualScenarios = calculateBearBaseBullScenarios(actualCosts, 0, 3_900_000, 20, 1_474, "stable");
+    const actualScores = scoreProperty(property, actualCosts, actualScenarios, 20);
+
+    expect(profile).toMatchObject({ id: "hastings-default", source: "auckland_default_pending_regional_rates" });
+    expect(actualScenarios).toHaveLength(3);
+    expect(actualScores).toMatchObject({
+      composite: expect.any(Number),
+      ease: expect.any(Number),
+      cost: expect.any(Number),
+      roi: expect.any(Number),
+    });
+    expect(Math.max(actualScores.composite, actualScores.ease, actualScores.cost, actualScores.roi)).toBeLessThanOrEqual(5);
+    expect(developmentScoreUnavailableReason(property, actualCosts, actualScenarios)).toBeNull();
+  });
+
   it("produces Lodge Avenue costs, ROI, and all scores with the isolated Tauranga profile", () => {
     const property = merged({
       cv_nzd: 1_580_000,

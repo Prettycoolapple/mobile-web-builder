@@ -1097,6 +1097,33 @@ describe("regional planning rule status", () => {
     });
   });
 
+  it("enables Hastings General Residential yield, ROI, and development scoring", () => {
+    const provider = { providerId: "hastings" as const, providerName: "Hastings District Council planning provider" };
+    const zone = {
+      zone_code: "Hastings General Residential",
+      zone_description: "Hastings General Residential",
+      min_lot_size_sqm: null,
+      raw_zone: "{}",
+    };
+    expect(regionalPlanningRuleStatus(provider, zone, 29_483)).toMatchObject({
+      subdivisionRules: "standard_yield_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: true,
+      automaticRoiAllowed: true,
+      regionalZoneCode: "HDC_GENERAL_RESIDENTIAL",
+      verifiedMinimumLotSqm: 350,
+    });
+    expect(calculateRegionalPotentialLots({
+      provider,
+      zone,
+      landAreaSqm: 29_483,
+      overlays: [],
+    })).toMatchObject({
+      effectiveMinimumLotSqm: 350,
+      lotResult: { min_lot_size: 350 },
+    });
+  });
+
   it("models Tauranga MDRZ through the no-minimum design-led pathway with ROI enabled", () => {
     const provider = { providerId: "tauranga" as const, providerName: "Tauranga City Council planning provider" };
     const zone = {

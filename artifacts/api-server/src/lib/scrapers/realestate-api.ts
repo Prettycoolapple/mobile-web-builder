@@ -1104,7 +1104,7 @@ function usableProfilePropertyType(value: string | null | undefined): string | n
   // RF196B) rather than a user-facing typology. Never expose that as the
   // Property type; let the exact listing-page metadata supply "Unit", "House",
   // etc. instead.
-  if (/^[A-Z]{1,4}\d+[A-Z0-9]*$/i.test(clean)) return null;
+  if (/^[A-Z]{1,3}$/.test(clean) || /^[A-Z]{1,4}\d+[A-Z0-9]*$/i.test(clean)) return null;
   return clean;
 }
 

@@ -543,6 +543,8 @@ export function hasCacheableCore(r: PipelineResult): boolean {
         ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
       : providerId === "napier"
       ? ph?.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
+      : providerId === "hastings"
+      ? ph?.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
       : providerId === "whakatane"
       ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
       : providerId === "southland"
@@ -1819,6 +1821,8 @@ export async function runPropertyPipeline(
         ? "selwyn"
       : planningProvider?.providerId === "napier"
         ? "napier"
+      : planningProvider?.providerId === "hastings"
+        ? "hastings"
       : planningProvider?.providerId === "southland"
         ? "southland"
       : planningProvider?.providerId === "taupo"
@@ -1921,7 +1925,8 @@ export async function runPropertyPipeline(
     || planningProvider?.providerId === "tauranga"
     || planningProvider?.providerId === "kapiti"
     || planningProvider?.providerId === "selwyn"
-    || planningProvider?.providerId === "napier";
+    || planningProvider?.providerId === "napier"
+    || planningProvider?.providerId === "hastings";
   const fallbackExitSalePrice = !hasRealComparablePricing && regionalCvExitFallbackAllowed
     ? merged.listing_price ?? merged.cv_nzd
     : null;

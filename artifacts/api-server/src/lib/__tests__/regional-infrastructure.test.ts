@@ -213,6 +213,30 @@ describe("regional infrastructure fetchers", () => {
     expect(fetchMock.mock.calls.every((call) => String(call[0]).includes("717214_Napier_City_Council_layers"))).toBe(true);
   });
 
+  it("returns all three Hastings public networks for 226 Havelock Road", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      const mapped = ["/2/query", "/3/query", "/4/query", "/11/query", "/12/query", "/13/query", "/20/query", "/32/query", "/22/query"]
+        .some((suffix) => url.pathname.endsWith(suffix));
+      return new Response(JSON.stringify({
+        features: mapped ? [{
+          attributes: { OBJECTID: 1, IPS_Ownership: "PUB", IPS_Service_Status: "INS" },
+          geometry: { paths: [[[176.8594, -39.6552], [176.8599, -39.6552]]] },
+        }] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchRegionalInfrastructure("hastings", -39.65520308, 176.85964827, null);
+
+    expect(result.map((item) => item.name).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(result.every((item) => item.location !== "unknown")).toBe(true);
+    expect(result.every((item) => item.service_source_owner === "Hastings District Council")).toBe(true);
+    expect(fetchMock.mock.calls.every((call) =>
+      new URL(String(call[0])).searchParams.get("where") === "IPS_Ownership = 'PUB' AND IPS_Service_Status = 'INS'"
+    )).toBe(true);
+  });
+
   it("returns all three Tauranga public networks for 16 Lodge Avenue", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       features: [{

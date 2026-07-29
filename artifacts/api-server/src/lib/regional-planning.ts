@@ -29,6 +29,7 @@ export type PlanningProviderId =
   | "western-bay"
   | "tauranga"
   | "napier"
+  | "hastings"
   | "southland"
   | "unsupported";
 
@@ -247,6 +248,10 @@ const TAURANGA_SOUTH_BOUNDS: Bounds = { minLat: -37.89, maxLat: -37.74, minLng: 
 // Hastings. Keep the coordinate envelope conservative at the shared boundary;
 // exact geocoder locality/TA text covers the remaining northern rural area.
 const NAPIER_CITY_BOUNDS: Bounds = { minLat: -39.58, maxLat: -39.35, minLng: 176.78, maxLng: 176.99 };
+// A conservative urban Hastings/Havelock North/Flaxmere/Clive envelope avoids
+// claiming Wairoa or Central Hawke's Bay inside a broad rectangular district
+// extent. Rural Hastings properties are resolved from their TA/locality text.
+const HASTINGS_DISTRICT_BOUNDS: Bounds = { minLat: -39.78, maxLat: -39.55, minLng: 176.68, maxLng: 176.98 };
 const SOUTHLAND_DISTRICT_BOUNDS: Bounds = { minLat: -47.35, maxLat: -44.75, minLng: 166.45, maxLng: 169.35 };
 const INVERCARGILL_CITY_BOUNDS: Bounds = { minLat: -46.55, maxLat: -46.30, minLng: 168.20, maxLng: 168.50 };
 const GORE_DISTRICT_URBAN_BOUNDS: Bounds = { minLat: -46.18, maxLat: -45.92, minLng: 168.78, maxLng: 169.18 };
@@ -879,6 +884,36 @@ const providerRegistry: PlanningProvider[] = [
       /\bporaiti\b/,
       /\bbay view\b/,
       /\bahuriri\b/,
+    ]),
+  ),
+  provider(
+    "hastings",
+    "Hastings District Council planning provider",
+    "Hastings District Council",
+    "Hawke's Bay",
+    "full",
+    "Hastings District Plan",
+    [
+      { label: "Hastings operative district-plan zones", url: "https://services1.arcgis.com/8L3DQUzjrkgEmDpQ/arcgis/rest/services/OpenData_OperativeDistrictPlan_Zones/FeatureServer" },
+      { label: "Hastings operative district-plan controls and overlays", url: "https://gismaps.hdc.govt.nz/server/rest/services/DistrictPlan/OperativeDP_EPlan/MapServer" },
+      { label: "Hastings public property GIS", url: "https://gismaps.hdc.govt.nz/server/rest/services/Property/Property_Data/MapServer/0" },
+      { label: "Hastings public three-waters assets", url: "https://gismaps.hdc.govt.nz/server/rest/services/3Waters/3WatersAssets/MapServer" },
+      { label: "Hawke's Bay Regional Council property hazards", url: "https://gis.hbrc.govt.nz/server/rest/services/HazardPortal/HBRC_Property_Hazards/MapServer" },
+    ],
+    (context) => supportsAny(context, HASTINGS_DISTRICT_BOUNDS, [
+      /\bhastings district\b/,
+      /\bhastings\b/,
+      /\bakina\b/,
+      /\bhavelock north\b/,
+      /\bflaxmere\b/,
+      /\bclive\b/,
+      /\bwhakatu\b/,
+      /\bhaumoana\b/,
+      /\bte awanga\b/,
+      /\bwaimarama\b/,
+      /\bmaraekakaho\b/,
+      /\bbridge pa\b/,
+      /\bpakipaki\b/,
     ]),
   ),
   provider(

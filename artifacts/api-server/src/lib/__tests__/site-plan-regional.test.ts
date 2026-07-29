@@ -341,6 +341,60 @@ describe("regional site-plan wrapper", () => {
       ]));
   });
 
+  it("builds 226 Havelock Road Site Plan with Hastings public services and applicable hazards", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isService = /3WatersAssets\/MapServer\/(?:2|3|4|11|12|13|20|22|32)\/query/.test(url);
+      const isHazard = /HBRC_Property_Hazards\/MapServer\/(?:16|17|18|19|21|24)\/query/.test(url);
+      const features = isService
+        ? [{
+            attributes: { OBJECTID: 1, IPS_Ownership: "PUB", IPS_Service_Status: "INS" },
+            geometry: { paths: [[[176.8593, -39.6554], [176.8600, -39.6550]]] },
+          }]
+        : isHazard
+          ? [{
+              attributes: {
+                F3604_haza: "Medium",
+                LSN_25y: "Insignificant",
+                LSN_100y: "Moderate",
+                LSN_500y: "Moderate",
+                Relative_Earthquake_Amplificati: "Alluvial sand, silt and gravel",
+                Location: "Heretaunga Plains",
+                Class: "Low flood risk",
+              },
+              geometry: { rings: [[
+                [176.8589, -39.6558], [176.8603, -39.6558], [176.8603, -39.6547],
+                [176.8589, -39.6547], [176.8589, -39.6558],
+              ]] },
+            }]
+          : [];
+      return new Response(JSON.stringify({ features }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const sitePlan = await buildSitePlanForReport("226 Havelock Road, Akina, Hastings", {
+      geocode: {
+        lat: -39.65520308,
+        lng: 176.85964827,
+        formatted: "226 Havelock Road, Akina, Hastings, Hawke's Bay",
+        suburb: "Akina",
+      },
+      linz_parcel: null,
+    } as RawPropertyData);
+
+    expect(sitePlan.layers.filter((layer) => layer.group === "services" && layer.available).map((layer) => layer.label).sort())
+      .toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available).map((layer) => layer.label))
+      .toEqual(expect.arrayContaining([
+        "Liquefaction Vulnerability",
+        "Liquefaction Severity - 25 Year",
+        "Liquefaction Severity - 100 Year",
+        "Liquefaction Severity - 500 Year",
+        "Earthquake Ground Amplification",
+        "Flood Risk Area",
+      ]));
+    expect(sitePlan.layers.some((layer) => layer.label === "Heritage Feature")).toBe(false);
+  });
+
   it("returns Waipa three-waters and only marks applicable planning overlays available", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

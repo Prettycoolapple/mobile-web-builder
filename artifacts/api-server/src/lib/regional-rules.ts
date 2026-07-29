@@ -122,6 +122,7 @@ const DUNEDIN_GR2_VARIATION2_SOURCE =
 const WESTERN_BAY_SUBDIVISION_SOURCE =
   "https://www.westernbay.govt.nz/property-rates-and-building/district-plan-and-resource-consents/district-plan";
 const NAPIER_DISTRICT_PLAN_SOURCE = "https://eplan.napier.govt.nz/eplan2025";
+const HASTINGS_DISTRICT_PLAN_SOURCE = "https://www.hastingsdc.govt.nz/services/district-plan/";
 const TAURANGA_CITY_PLAN_SOURCE =
   "https://www.tauranga.govt.nz/council/strategies-and-plans/tauranga-city-plan/how-to-use-the-city-plan";
 const KAPITI_RURAL_LIFESTYLE_SOURCE =
@@ -150,6 +151,7 @@ const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["provi
   "western-bay",
   "tauranga",
   "napier",
+  "hastings",
   "southland",
 ]);
 
@@ -335,6 +337,24 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
       "The 350sqm standard applies to newly created vacant residential allotments. Existing-unit subdivisions or concurrent land-use and subdivision applications can follow different design-led pathways.",
       "The automatic yield is a gross first-pass screen only; access, existing dwelling placement, infrastructure capacity, overland flow, liquefaction and other mapped controls can reduce practical yield.",
       "A nearby public main does not prove that an existing private service connection is present or has capacity for additional dwellings.",
+    ],
+    roiEnabled: true,
+  },
+  {
+    providerId: "hastings",
+    regionalZoneCode: "HDC_GENERAL_RESIDENTIAL",
+    zonePattern: /\bhastings general residential\b/i,
+    zoneLabel: "Hastings General Residential",
+    standardMinimumLotSqm: 350,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Hastings District Plan General Residential subdivision standards",
+    sourceUrl: HASTINGS_DISTRICT_PLAN_SOURCE,
+    caveats: [
+      "The 350sqm vacant-allotment minimum is a gross first-pass screen; access, lot shape, existing development and infrastructure capacity can reduce practical yield.",
+      "Existing-unit subdivisions and integrated land-use/subdivision proposals can follow different design-led pathways and require council assessment.",
+      "The nearby public-main result does not prove that a private connection exists or that the networks have capacity for additional development.",
+      "Mapped river, flood, liquefaction, heritage, contaminated-land and other controls must be checked against the proposed layout.",
     ],
     roiEnabled: true,
   },

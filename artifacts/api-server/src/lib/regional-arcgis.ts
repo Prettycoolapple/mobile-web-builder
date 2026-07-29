@@ -164,6 +164,10 @@ const TAURANGA_LIQUEFACTION =
   "https://gis.tauranga.govt.nz/server/rest/services/Liquefaction/MapServer";
 const NAPIER_OPERATIVE_DISTRICT_PLAN =
   "https://spatial.napier.govt.nz/server/rest/services/NapierMaps/OperativeDistrictPlan_2025/MapServer";
+const HASTINGS_DISTRICT_PLAN =
+  "https://gismaps.hdc.govt.nz/server/rest/services/DistrictPlan/OperativeDP_EPlan/MapServer";
+const HASTINGS_ZONES =
+  "https://services1.arcgis.com/8L3DQUzjrkgEmDpQ/arcgis/rest/services/OpenData_OperativeDistrictPlan_Zones/FeatureServer";
 const HBRC_PROPERTY_HAZARDS =
   "https://gis.hbrc.govt.nz/server/rest/services/HazardPortal/HBRC_Property_Hazards/MapServer";
 const SOUTHLAND_ZONING =
@@ -963,6 +967,69 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
       overlay(HBRC_PROPERTY_HAZARDS, 64, "Coastal Inundation - 2100 2% AEP", "polygon", "restricted"),
       overlay(HBRC_PROPERTY_HAZARDS, 63, "Coastal Inundation - 2100 1% AEP", "polygon", "restricted"),
       overlay(HBRC_PROPERTY_HAZARDS, 49, "Napier District Plan Coastal Hazard Zone", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 3, "High Landslide Risk - Stream Delivery", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 4, "High Landslide Risk", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 5, "Moderate Earthflow Risk", "polygon", "moderate"),
+      overlay(HBRC_PROPERTY_HAZARDS, 6, "Severe Earthflow Risk", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 7, "Gully Risk", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 56, "Contaminated Site - Risk Not Quantified", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 57, "Contaminated Site - Managed for Land Use", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 58, "Contaminated Site - Human Health", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 59, "Contaminated Site - Environment", "polygon", "restricted"),
+    ],
+    queryTimeoutMs: 12_000,
+  },
+  hastings: {
+    zoneLayers: [
+      {
+        serviceUrl: HASTINGS_ZONES,
+        layerId: 39,
+        label: "Hastings Operative District Plan Zone",
+        codeField: "Zone",
+        nameFields: ["Zone"],
+        detailFields: ["ReviewZone", "Location"],
+        decodeCodedValues: false,
+      },
+    ],
+    overlayLayers: [
+      overlay(HASTINGS_DISTRICT_PLAN, 1, "Archaeological Site", "point", "restricted", 30),
+      overlay(HASTINGS_DISTRICT_PLAN, 2, "Notable Tree", "point", "moderate", 30),
+      overlay(HASTINGS_DISTRICT_PLAN, 3, "Wahi Taonga", "polygon", "restricted"),
+      overlay(HASTINGS_DISTRICT_PLAN, 4, "Heritage Feature", "point", "restricted", 30),
+      overlay(HASTINGS_DISTRICT_PLAN, 5, "Historic Area", "polygon", "restricted"),
+      overlay(HASTINGS_DISTRICT_PLAN, 8, "Riparian Land Management Area", "polygon", "control"),
+      overlay(HASTINGS_DISTRICT_PLAN, 9, "Recommended Area for Protection", "polygon", "restricted"),
+      overlay(HASTINGS_DISTRICT_PLAN, 11, "Toop Street Special Character Area", "polygon", "control"),
+      overlay(HASTINGS_DISTRICT_PLAN, 12, "Central Character Precinct", "polygon", "control"),
+      overlay(HASTINGS_DISTRICT_PLAN, 13, "Te Mata Restricted Building Area", "polygon", "restricted"),
+      overlay(HASTINGS_DISTRICT_PLAN, 14, "Havelock North Character Restricted Building Area", "polygon", "restricted"),
+      overlay(HASTINGS_DISTRICT_PLAN, 15, "Te Mata Lifestyle Area Limit", "polyline", "control", 25),
+      overlay(HASTINGS_DISTRICT_PLAN, 16, "Te Awanga Lifestyle Area Limit", "polyline", "control", 25),
+      overlay(HASTINGS_DISTRICT_PLAN, 17, "Roys Hill Winegrowing Area", "polygon", "control"),
+      overlay(HASTINGS_DISTRICT_PLAN, 19, "Landscape Review Area", "polygon", "restricted"),
+      overlay(HASTINGS_DISTRICT_PLAN, 21, "Scheduled Activity", "polygon", "control"),
+      overlay(HASTINGS_DISTRICT_PLAN, 22, "Designation", "polygon", "control"),
+      overlay(HASTINGS_DISTRICT_PLAN, 23, "Contaminated Site", "polygon", "restricted"),
+      overlay(HASTINGS_DISTRICT_PLAN, 24, "National Grid Pylon", "point", "restricted", 35),
+      overlay(HASTINGS_DISTRICT_PLAN, 25, "National Grid Line", "polyline", "restricted", 35),
+      overlay(HASTINGS_DISTRICT_PLAN, 26, "Bridge Pa Aerodrome Noise Boundary", "polygon", "moderate"),
+      overlay(HASTINGS_DISTRICT_PLAN, 27, "Pan Pac Noise Boundary", "polygon", "moderate"),
+      overlay(HASTINGS_DISTRICT_PLAN, 28, "River Hazard Overlay", "polygon", "restricted"),
+      overlay(HASTINGS_DISTRICT_PLAN, 29, "Prohibited Development Area", "polygon", "restricted"),
+      overlay(HASTINGS_DISTRICT_PLAN, 30, "Coastal Environment Boundary", "polygon", "control"),
+      overlay(HASTINGS_DISTRICT_PLAN, 33, "Unconfined Aquifer", "polygon", "moderate"),
+
+      overlay(HBRC_PROPERTY_HAZARDS, 16, "Liquefaction Vulnerability", "polygon", "restricted", undefined, ["F3604_haza", "Hazard_Description", "Confidence"]),
+      overlay(HBRC_PROPERTY_HAZARDS, 17, "Liquefaction Severity - 25 Year", "polygon", "moderate", undefined, ["LSN_25y", "Hazard_Description", "Confidence"]),
+      overlay(HBRC_PROPERTY_HAZARDS, 18, "Liquefaction Severity - 100 Year", "polygon", "restricted", undefined, ["LSN_100y", "Hazard_Description", "Confidence"]),
+      overlay(HBRC_PROPERTY_HAZARDS, 19, "Liquefaction Severity - 500 Year", "polygon", "restricted", undefined, ["LSN_500y", "Hazard_Description", "Confidence"]),
+      overlay(HBRC_PROPERTY_HAZARDS, 21, "Earthquake Ground Amplification", "polygon", "moderate", undefined, ["Relative_Earthquake_Amplificati", "VALUE"]),
+      overlay(HBRC_PROPERTY_HAZARDS, 24, "Flood Risk Area", "polygon", "moderate", undefined, ["Location", "Class", "FloodLevel", "ReturnPeriod"]),
+      overlay(HBRC_PROPERTY_HAZARDS, 62, "Tsunami Near Source Inundation", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 2, "Tsunami 2500 Year Inundation", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 65, "Coastal Inundation - 2020 2% AEP", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 64, "Coastal Inundation - 2100 2% AEP", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 63, "Coastal Inundation - 2100 1% AEP", "polygon", "restricted"),
       overlay(HBRC_PROPERTY_HAZARDS, 3, "High Landslide Risk - Stream Delivery", "polygon", "restricted"),
       overlay(HBRC_PROPERTY_HAZARDS, 4, "High Landslide Risk", "polygon", "restricted"),
       overlay(HBRC_PROPERTY_HAZARDS, 5, "Moderate Earthflow Risk", "polygon", "moderate"),
