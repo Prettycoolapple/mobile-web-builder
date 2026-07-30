@@ -15,6 +15,7 @@ import {
   extractNearbyAmenityTerms,
   normaliseNearbyAmenityTerms,
 } from "./nearby-amenities";
+import { isReportFollowUpQuestion } from "./agent-contact-intent";
 
 export { hasNumberedStreetAddress, hasNonStandardSalePropertyReference, hasUnnumberedStreetLine } from "./street-address-detect";
 
@@ -358,6 +359,7 @@ For dwelling-condition criteria, set filterSpec.dwellingCondition to "older_do_u
 Set filterSpec=null when the user names no measurable criteria.
 
 Critical distinction:
+  When a property report is open, questions about that property's risks, costs, ROI, planning, overlays, consent, infrastructure, or assumptions are followup + answer_in_chat. "What are the main development risks?" means risks for the open report; the word "development" does NOT make it a property-discovery request. Only use show_listing_cards when the latest message explicitly asks to find/show/search/browse/list properties, listings, sites, or opportunities.
   "recently sold", "sold price", "sales records", "settled sales", "成交价", "成交记录", "已售", "售出" => recent_sales_lookup, subject=market, execution=show_recent_sales_table, mode=followup. This is NOT property_discovery and must NOT show listing cards, even if the user says "find/show/search".
   If the user corrects you with "not listings / not for sale, I mean sold prices /成交价", preserve the prior area and filters from history and classify as recent_sales_lookup.
   "near/nearby/around/周边/附近 + schools/hospitals/clinics/pools/recreation centres/etc." => nearby_amenity_lookup, subject=amenities (or schools when only schools), execution=answer_nearby_amenities, mode=followup. This is NOT property_discovery and must NOT show listing cards. It is also NOT a feasibility report merely because the user included a numbered address.
@@ -943,6 +945,25 @@ export function normaliseIncludeTenures(raw: unknown): ("cross_lease" | "leaseho
   return [...out];
 }
 
+function isExplicitPropertyDiscoveryRequest(message: string): boolean {
+  if (isListingBrowseIntent(message)) return true;
+  return (
+    /\b(?:find|show|search|browse|list|look(?:ing)?\s+for|recommend|give\s+me)\b.{0,90}\b(?:properties|property|listings?|homes?|houses?|sections?|land|sites?|opportunit(?:y|ies))\b/i.test(message)
+    || /\b(?:what(?:'s|\s+is|\s+are)?|any|which|more|other)\b.{0,90}\b(?:subdividable\s+(?:properties|sites?|land)|subdivision\s+opportunit(?:y|ies)|development\s+(?:properties|sites?|land|opportunit(?:y|ies))|developable\s+(?:properties|sites?|land))\b/i.test(message)
+    || /(?:找|搜索|搜尋|查找|显示|顯示|看看|推荐|推薦).{0,60}(?:房产|房產|物业|物業|房源|地块|地塊|土地|开发机会|開發機會|分割机会|分割機會)/u.test(message)
+  );
+}
+
+function shouldForceOpenReportFollowUp(
+  message: string,
+  reportContext?: { address?: string | null; suburb?: string | null } | null,
+): boolean {
+  return Boolean(reportContext?.address)
+    && isReportFollowUpQuestion(message)
+    && !hasNumberedStreetAddress(message)
+    && !isExplicitPropertyDiscoveryRequest(message);
+}
+
 export async function extractChatIntent(
   messages: Message[],
   reportContext?: {
@@ -1178,6 +1199,34 @@ ${INTENT_SCHEMA}`;
           reasoning: intent.reasoning || "nearby amenity lookup",
         };
       }
+    }
+
+    // An open report is the subject of report-topic questions unless the user
+    // explicitly asks to discover other properties. This deterministic guard
+    // prevents wording such as "main development risks" from being mistaken
+    // for an area-wide development-property search.
+    if (
+      intent.execution !== "show_recent_sales_table"
+      && intent.execution !== "answer_nearby_amenities"
+      && shouldForceOpenReportFollowUp(lastUserMessage.content, reportContext)
+    ) {
+      intent = {
+        ...intent,
+        intentCategory: "followup",
+        execution: "answer_in_chat",
+        mode: "followup",
+        address: null,
+        suburb: reportContext?.suburb?.toLowerCase().trim() ?? intent.suburb,
+        discoveryPresentation: null,
+        filterSpec: null,
+        isFollowUp: true,
+        includeNegotiation: false,
+        needsClarification: false,
+        clarificationQuestion: null,
+        wideScanSubdivisionIntent: false,
+        wantsSubdivisionLayout: false,
+        reasoning: "Question refers to the currently open feasibility report.",
+      };
     }
 
     // If the model chose analyse for a road/area listing query, route to discover instead.

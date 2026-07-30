@@ -132,6 +132,79 @@ describe("chat intent extraction", () => {
     expect(intent.discoveryPresentation).toBe("scored_screening");
   });
 
+  it.each([
+    "What are the main development risks?",
+    "What are the risks?",
+  ])("keeps an open-report risk question in chat even when the model selects discovery: %s", async (message) => {
+    mockIntentJson({
+      intentCategory: "property_discovery",
+      subject: "subdivision",
+      execution: "show_listing_cards",
+      confidence: 0.8,
+      mode: "discover",
+      address: null,
+      suburb: "papakura",
+      minPrice: null,
+      maxPrice: null,
+      criteria: "development risks",
+      discoveryPresentation: "scored_screening",
+      isFollowUp: false,
+      includeNegotiation: false,
+      needsClarification: false,
+      clarificationQuestion: null,
+      wantsProviderRecommendation: false,
+      wantsAnotherProvider: false,
+      suggestedDiscipline: null,
+      wideScanSubdivisionIntent: true,
+      reasoning: "Model incorrectly interpreted development as property discovery.",
+    });
+
+    const intent = await extractChatIntent(
+      [{ role: "user", content: message }],
+      { address: "13 Campbell Place, Papakura", suburb: "Papakura" },
+    );
+
+    expect(intent.intentCategory).toBe("followup");
+    expect(intent.execution).toBe("answer_in_chat");
+    expect(intent.mode).toBe("followup");
+    expect(intent.discoveryPresentation).toBeNull();
+    expect(intent.wideScanSubdivisionIntent).toBe(false);
+  });
+
+  it("preserves an explicit property search when a report is open", async () => {
+    mockIntentJson({
+      intentCategory: "property_discovery",
+      subject: "subdivision",
+      execution: "show_listing_cards",
+      confidence: 0.95,
+      mode: "discover",
+      address: null,
+      suburb: "papakura",
+      minPrice: null,
+      maxPrice: null,
+      criteria: "subdividable properties in Papakura",
+      discoveryPresentation: "scored_screening",
+      isFollowUp: false,
+      includeNegotiation: false,
+      needsClarification: false,
+      clarificationQuestion: null,
+      wantsProviderRecommendation: false,
+      wantsAnotherProvider: false,
+      suggestedDiscipline: null,
+      wideScanSubdivisionIntent: true,
+      reasoning: "The user explicitly asked to show other properties.",
+    });
+
+    const intent = await extractChatIntent(
+      [{ role: "user", content: "Show me subdividable properties in Papakura" }],
+      { address: "13 Campbell Place, Papakura", suburb: "Papakura" },
+    );
+
+    expect(intent.intentCategory).toBe("property_discovery");
+    expect(intent.execution).toBe("show_listing_cards");
+    expect(intent.mode).toBe("discover");
+  });
+
   it("classifies currently available suburb searches as generic listing discovery", async () => {
     mockIntentJson({
       intentCategory: "property_discovery",
