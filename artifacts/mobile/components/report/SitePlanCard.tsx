@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Image,
   InteractionManager,
   StyleSheet,
@@ -33,7 +34,6 @@ import { useColors } from "@/hooks/useColors";
 import { useT } from "@/lib/i18n";
 import { translateForOS } from "@/lib/i18n";
 import { getApiBase } from "@/lib/api";
-import { AiSubdivisionIntroModal } from "@/components/report/AiSubdivisionIntroModal";
 import {
   pointsString,
   projectCoordinate,
@@ -447,7 +447,6 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
   const { width: viewportWidth } = useWindowDimensions();
   const searchId = report.historyId ?? null;
   const planHeight = Math.min(430, Math.max(310, viewportWidth - 42));
-  const [showAiModal, setShowAiModal] = useState(false);
   const didAutoOpenAiSubdivisionRef = useRef(false);
   const lastLaunchAiSubdivisionNonceRef = useRef(0);
   const aiBreath = useSharedValue(0);
@@ -701,48 +700,12 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
     setVisibleLayers((current) => ({ ...current, [id]: next }));
   };
 
-  const recordAiSubdivisionInterest = () => {
-    // Never open the funnel for a site Rubin cannot analyse — the user would be
-    // walked through an explainer only to hit an error at the end.
-    if (!subdivision.available) return;
-    setShowAiModal(true);
-    aiInterestEventRef.current = fetch(`${getApiBase()}/ai-subdivision-interest`, {
-      method: "POST",
-      headers: getApiHeaders(),
-      body: JSON.stringify({
-        searchId,
-        propertyAddress: report.address ?? null,
-      }),
-    })
-      .then(async (response) => {
-        if (!response.ok) return null;
-        const data = await response.json() as { id?: unknown };
-        return typeof data.id === "string" ? data.id : null;
-      })
-      .catch(() => null);
-  };
-
-  useEffect(() => {
-    // Waits on `available`, so a request arriving from chat opens the funnel only
-    // once the gating lookup has confirmed Rubin covers this parcel.
-    if (!subdivision.available) return;
-    const shouldAutoOpen = autoOpenAiSubdivision && !didAutoOpenAiSubdivisionRef.current;
-    const shouldOpenFromAction = launchAiSubdivisionNonce > lastLaunchAiSubdivisionNonceRef.current;
-    if (!shouldAutoOpen && !shouldOpenFromAction) return;
-    if (shouldAutoOpen) didAutoOpenAiSubdivisionRef.current = true;
-    lastLaunchAiSubdivisionNonceRef.current = launchAiSubdivisionNonce;
-    recordAiSubdivisionInterest();
-  }, [autoOpenAiSubdivision, launchAiSubdivisionNonce, subdivision.available]);
-
-  const completeAiSubdivisionInterest = () => {
-    const eventPromise = aiInterestEventRef.current;
-    setShowAiModal(false);
-    aiInterestEventRef.current = null;
-
-    // Funnel done → open Rubin full-screen on this property. Coordinates come
-    // from the site plan already on screen, so Rubin resolves the exact parcel
-    // this report was built from rather than re-geocoding the address string.
-    // No solve is triggered; the user is shown the site.
+  /**
+   * Open Rubin full-screen on this property. Coordinates come from the site
+   * plan already on screen, so Rubin resolves the exact parcel this report was
+   * built from rather than re-geocoding the address string.
+   */
+  const openRubin = () => {
     router.push({
       pathname: "/rubin",
       params: {
@@ -752,7 +715,10 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
           : {}),
       },
     });
+  };
 
+  /** Mark the interest event completed. Analytics only — never blocks the user. */
+  const completeInterestEvent = (eventPromise: Promise<string | null> | null) => {
     if (!eventPromise) return;
     void eventPromise.then(async (eventId) => {
       if (!eventId) return;
@@ -774,17 +740,81 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
     });
   };
 
-  const activeSpecialStatus =
-    user?.specialStatus === "friends_family" ||
-    (user?.specialStatus === "supercharge" &&
-      (!user.specialStatusExpiresAt ||
-        new Date(user.specialStatusExpiresAt).getTime() > Date.now()));
-  const showUpgradeSlide =
-    !user ||
-    (user.role === "general" &&
-      user.subscriptionTier !== "standard" &&
-      user.subscriptionTier !== "pro" &&
-      !activeSpecialStatus);
+  const recordAiSubdivisionInterest = () => {
+    // Never open the funnel for a site Rubin cannot analyse — the user would be
+    // walked through an explainer only to hit an error at the end.
+    if (!subdivision.available) return;
+
+    const eventPromise = fetch(`${getApiBase()}/ai-subdivision-interest`, {
+      method: "POST",
+      headers: getApiHeaders(),
+      body: JSON.stringify({
+        searchId,
+        propertyAddress: report.address ?? null,
+      }),
+    })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        const data = await response.json() as { id?: unknown };
+        return typeof data.id === "string" ? data.id : null;
+      })
+      .catch(() => null);
+
+    // Straight into Rubin. The intro slides are deliberately not shown for now
+    // (see the note where the modal used to be rendered) — the real thing loads
+    // in about the time the first slide took to read. The funnel event is still
+    // recorded and completed, so the analytics stay comparable across the change.
+    aiInterestEventRef.current = null;
+    openRubin();
+    completeInterestEvent(eventPromise);
+  };
+
+  /**
+   * Tapping the button on a site Rubin cannot analyse.
+   *
+   * It stays visibly inert, but a control that does nothing at all reads as a
+   * bug — so say which of the two real limits was hit. The notice under the map
+   * says the same thing; this is for the user who went straight for the button.
+   */
+  const explainSubdivisionUnavailable = () => {
+    if (subdivision.siteLoading) return;
+
+    if (subdivision.siteError) {
+      Alert.alert(
+        translateForOS("site_plan.subdivision.title"),
+        translateForOS("site_plan.subdivision.site_error"),
+        [
+          { text: translateForOS("common.cancel"), style: "cancel" },
+          { text: translateForOS("site_plan.subdivision.retry"), onPress: subdivision.retrySite },
+        ],
+      );
+      return;
+    }
+
+    const result = subdivision.siteResult;
+    const body =
+      result && !result.supported && result.reason === "unsupported-zone"
+        ? report.zone_label
+          ? translateForOS("site_plan.subdivision.unavailable_zone", { zone: report.zone_label })
+          : translateForOS("site_plan.subdivision.unavailable_zone_generic")
+        : translateForOS("site_plan.subdivision.unavailable_alert_body");
+
+    Alert.alert(translateForOS("site_plan.subdivision.unavailable_alert_title"), body, [
+      { text: translateForOS("common.ok") },
+    ]);
+  };
+
+  useEffect(() => {
+    // Waits on `available`, so a request arriving from chat opens the funnel only
+    // once the gating lookup has confirmed Rubin covers this parcel.
+    if (!subdivision.available) return;
+    const shouldAutoOpen = autoOpenAiSubdivision && !didAutoOpenAiSubdivisionRef.current;
+    const shouldOpenFromAction = launchAiSubdivisionNonce > lastLaunchAiSubdivisionNonceRef.current;
+    if (!shouldAutoOpen && !shouldOpenFromAction) return;
+    if (shouldAutoOpen) didAutoOpenAiSubdivisionRef.current = true;
+    lastLaunchAiSubdivisionNonceRef.current = launchAiSubdivisionNonce;
+    recordAiSubdivisionInterest();
+  }, [autoOpenAiSubdivision, launchAiSubdivisionNonce, subdivision.available]);
 
   const visibleVectorLayers = useMemo(
     () =>
@@ -941,13 +971,17 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
               </TouchableOpacity>
             </Animated.View>
           ) : (
-            // Rubin is Auckland-only. Rather than let a user tap into a raw 404,
-            // the control is inert and the reason is stated under the map.
-            <View
+            // Rubin is Auckland-only, so the control stays visibly inert rather
+            // than letting a user tap into a raw 404. It is still *tappable*,
+            // though: a button that does nothing at all reads as a broken app,
+            // so a tap explains which limit was hit.
+            <TouchableOpacity
               style={[styles.aiButtonDisabled, { backgroundColor: colors.muted, borderColor: colors.border }]}
+              onPress={explainSubdivisionUnavailable}
+              activeOpacity={0.7}
               accessibilityRole="button"
-              accessibilityState={{ disabled: true }}
               accessibilityLabel={translateForOS("site_plan.ai_subdivision")}
+              accessibilityHint={translateForOS("site_plan.subdivision.unavailable_alert_title")}
             >
               {subdivision.siteLoading ? (
                 <ActivityIndicator size="small" color={colors.mutedForeground} />
@@ -960,7 +994,7 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
               >
                 {translateForOS("site_plan.ai_subdivision")}
               </Text>
-            </View>
+            </TouchableOpacity>
           )}
         </View>
       </View>
@@ -1120,12 +1154,11 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
           ))}
         </View>
       ) : null}
-      <AiSubdivisionIntroModal
-        visible={showAiModal}
-        showUpgradeSlide={showUpgradeSlide}
-        onCancel={() => setShowAiModal(false)}
-        onComplete={completeAiSubdivisionInterest}
-      />
+      {/* The AI-subdivision intro slides are switched off for now — the button
+          opens Rubin directly. `AiSubdivisionIntroModal` and its i18n strings
+          are untouched; bringing them back means rendering it here again and
+          having `recordAiSubdivisionInterest` set state instead of calling
+          `openRubin()`. */}
     </View>
   );
 }
