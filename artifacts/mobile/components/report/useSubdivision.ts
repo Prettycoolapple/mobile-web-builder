@@ -28,6 +28,16 @@ import {
 /** Parcel/zone facts effectively never change within a session. */
 const SITE_STALE_TIME_MS = 60 * 60 * 1000;
 const SITE_GC_TIME_MS = 24 * 60 * 60 * 1000;
+/**
+ * "Unsupported" is cached for far less time than a supported answer, because the
+ * two are not equally trustworthy. Rubin reports *any* 404 as unsupported —
+ * including a 404 for the route itself, which is what a mid-deploy Rubin returns
+ * for every address in the country. Caching that for an hour greys the button
+ * out long after Rubin has recovered, with no way for the user to retry.
+ *
+ * A supported answer cannot be wrong in that way, so it keeps the full hour.
+ */
+const SITE_UNSUPPORTED_STALE_TIME_MS = 60 * 1000;
 
 export type ScenarioRunState =
   | { status: "idle" }
@@ -88,7 +98,8 @@ export function useSubdivision(target: SubdivisionTarget): SubdivisionState {
   const siteQuery = useQuery({
     queryKey: subdivisionSiteQueryKey(target),
     enabled: canRequest,
-    staleTime: SITE_STALE_TIME_MS,
+    staleTime: (query) =>
+      query.state.data?.supported === false ? SITE_UNSUPPORTED_STALE_TIME_MS : SITE_STALE_TIME_MS,
     gcTime: SITE_GC_TIME_MS,
     // One retry only: an unsupported site is a 200, so a throw here is a genuine
     // network/upstream fault, and the user can retry by hand from the UI.

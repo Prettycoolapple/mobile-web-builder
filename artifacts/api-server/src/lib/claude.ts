@@ -274,6 +274,9 @@ export interface ChatIntent {
   // Wide-scan signal — true when the user is asking for an area-wide subdivision sweep
   // (district, large suburb, "anything subdividable") that legitimately needs minutes to run.
   wideScanSubdivisionIntent: boolean;
+  // True when the user wants to SEE a subdivision layout for one property, not just
+  // read about whether it could subdivide. Drives landing the report on the Plan tab.
+  wantsSubdivisionLayout: boolean;
   // Meta
   reasoning: string;               // brief explanation for debugging / logging
 }
@@ -309,6 +312,7 @@ const INTENT_SCHEMA = `{
   "wantsAnotherProvider": <true when user already has a provider shown and wants to swap/replace/change it for a different one>,
   "suggestedDiscipline": "architect_designer" | "planner" | "engineer" | "quantity_surveyor" | "other" | null,
   "wideScanSubdivisionIntent": <true when user is asking for an area-wide subdivision/development sweep — see WIDE SCAN below>,
+  "wantsSubdivisionLayout": <true when the user wants to SEE a subdivision layout/scheme for ONE property — see SUBDIVISION LAYOUT below>,
   "filterSpec": { "minPotentialLots": <integer ≥2> | null, "maxSlopeDegrees": <number degrees> | null, "infrastructureOnParcel": ["storm"|"sewer"|"water"], "minRoiPct": <number> | null, "dwellingCondition": "older_do_up" | "avoid_recent_improvement" | "recent_improvement" | null, "searchScope": "analyzed_index" | "live_market" | "both" } | null,
   "reasoning": "<1 sentence explaining your classification>"
 }`;
@@ -615,7 +619,36 @@ Set false when:
   • The user is asking about non-subdivision criteria ("show me 3-bed houses under 1M" — discover, not wide-scan).
   • The user is asking for general advice without an area scope ("how does subdivision work?" — followup).
 
-Wide-scan intent CAN be true alongside mode="discover" or mode="followup". It is independent of mode classification — it is purely a hint about how long the search will take. Set it whenever the trigger conditions above are met, regardless of which mode you pick.`;
+Wide-scan intent CAN be true alongside mode="discover" or mode="followup". It is independent of mode classification — it is purely a hint about how long the search will take. Set it whenever the trigger conditions above are met, regardless of which mode you pick.
+
+## SUBDIVISION LAYOUT INTENT
+
+Set wantsSubdivisionLayout=true when the user wants to SEE how ONE property could be
+carved up — the shape and arrangement of the lots — rather than just read an opinion on
+whether subdivision is viable. The app lands them on the site-plan view instead of the
+written report.
+
+Judge this SEMANTICALLY. Users express it in many ways and you must recognise the goal,
+not a keyword. All of these are true:
+  - "subdivide 13 Campbell Place, Papakura"
+  - "visualise subdivision schemes" / "show me the subdivision options"
+  - "subdivide with max yield" / "squeeze the most lots out of this"
+  - "can 12 Foo Road subdivide into 3 lots?"
+  - "what would a 4-lot layout look like here?"
+  - "draw up the site plan" / "how would you lay it out?"
+  - Chinese equivalents: "分割", "细分", "細分", "看看分割方案", "最大化户数", "能分成几块"
+
+Asking a NUMBER of lots ("into 3 lots", "how many lots can it fit", "能分成几块") counts —
+wanting a count means wanting to see the arrangement that achieves it.
+
+Set false when:
+  • The scope is an area, not one property (that is wideScanSubdivisionIntent).
+  • The user wants rules or general education ("how does subdivision work in NZ?",
+    "what is the minimum lot size for MHU?") — no specific property to draw.
+  • The subject is not subdivision at all (cost, schools, market, provider).
+
+wantsSubdivisionLayout is independent of mode: it can be true for a brand-new analysis of
+a named address AND for a follow-up about the report already open.`;
 
 const VALID_INTENT_CATEGORIES: ChatIntentCategory[] = [
   "property_discovery",
@@ -932,6 +965,7 @@ export async function extractChatIntent(
       wantsProviderRecommendation: false, suggestedDiscipline: null,
       wantsAnotherProvider: false,
       wideScanSubdivisionIntent: false,
+      wantsSubdivisionLayout: false,
       filterSpec: null,
       reasoning: "empty messages",
     };
@@ -951,6 +985,7 @@ export async function extractChatIntent(
       wantsProviderRecommendation: false, suggestedDiscipline: null,
       wantsAnotherProvider: false,
       wideScanSubdivisionIntent: false,
+      wantsSubdivisionLayout: false,
       filterSpec: null,
       reasoning: "no user message",
     };
@@ -1061,6 +1096,7 @@ ${INTENT_SCHEMA}`;
       wantsAnotherProvider: Boolean(parsed.wantsAnotherProvider),
       suggestedDiscipline: parsed.suggestedDiscipline && VALID_DISCIPLINES.includes(parsed.suggestedDiscipline as string) ? parsed.suggestedDiscipline : null,
       wideScanSubdivisionIntent: Boolean(parsed.wideScanSubdivisionIntent),
+      wantsSubdivisionLayout: Boolean(parsed.wantsSubdivisionLayout),
       reasoning: parsed.reasoning ?? "",
     };
 
@@ -1080,6 +1116,7 @@ ${INTENT_SCHEMA}`;
         needsClarification: false,
         clarificationQuestion: null,
         wideScanSubdivisionIntent: false,
+        wantsSubdivisionLayout: false,
         reasoning: intent.reasoning || "informational subdivision rules question",
       };
     }
@@ -1108,6 +1145,7 @@ ${INTENT_SCHEMA}`;
         clarificationQuestion: null,
         nearbyAmenityTerms: [],
         wideScanSubdivisionIntent: false,
+        wantsSubdivisionLayout: false,
         reasoning: intent.reasoning || "recent sold-record lookup",
       };
     }
@@ -1136,6 +1174,7 @@ ${INTENT_SCHEMA}`;
           clarificationQuestion: null,
           nearbyAmenityTerms,
           wideScanSubdivisionIntent: false,
+          wantsSubdivisionLayout: false,
           reasoning: intent.reasoning || "nearby amenity lookup",
         };
       }
@@ -1309,6 +1348,7 @@ async function fallbackDetectIntent(
     wantsAnotherProvider: false,
     suggestedDiscipline: null,
     wideScanSubdivisionIntent: false,
+    wantsSubdivisionLayout: false,
     reasoning: "regex fallback",
   };
 }

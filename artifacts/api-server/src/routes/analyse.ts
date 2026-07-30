@@ -6635,9 +6635,20 @@ router.post(
       const providerSignal = {
         ...(wantsProviderRecommendation ? { wantsProviderRecommendation: true, suggestedDiscipline: suggestedProviderDiscipline ?? null } : {}),
         ...(wantsAnotherProvider ? { wantsAnotherProvider: true } : {}),
+        // Land the user on the Plan tab when they asked to SEE a layout rather
+        // than read about one. `wantsSubdivisionLayout` is the semantic signal
+        // and carries the load — users phrase this a dozen ways ("max yield",
+        // "into 3 lots", "what would it look like") that no keyword list
+        // survives. `isSubdivisionLayoutRequest` stays as a deterministic
+        // backstop for when the intent call falls back to regex or times out.
+        // The semantic signal stands alone — its own rules already require a
+        // single subdivision-focused property, so re-gating it on `subject`
+        // would just be a second chance to disagree. The older paths keep that
+        // guard because neither is specific to wanting a drawing.
         ...(
-          intent.subject === "subdivision" &&
-          (semanticWantsAnalysis || (Boolean(reportCtx) && isSubdivisionLayoutRequest(userText)))
+          intent.wantsSubdivisionLayout ||
+          (intent.subject === "subdivision" &&
+            (semanticWantsAnalysis || (Boolean(reportCtx) && isSubdivisionLayoutRequest(userText))))
             ? { openAiSubdivision: true }
             : {}
         ),
