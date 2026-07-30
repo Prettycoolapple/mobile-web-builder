@@ -16,9 +16,11 @@ import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useT } from "@/lib/i18n";
 
-// The final step used to be "launch" — a pre-release notice with a date. The
-// solver is live now, so the funnel ends by actually starting the analysis.
-type StepId = "planning" | "consultant" | "upgrade" | "run";
+// "launch" is the pre-release "Launching 31 July 2026" notice. Rubin is live, so
+// it is HIDDEN rather than removed — the slide, its icon and its copy all stay
+// put so it can be restored by adding it back to `steps` below. The funnel now
+// ends on the last real slide and opens Rubin from there.
+type StepId = "planning" | "consultant" | "upgrade" | "launch";
 
 interface Props {
   visible: boolean;
@@ -31,7 +33,7 @@ const STEP_ICONS: Record<StepId, keyof typeof Feather.glyphMap> = {
   planning: "grid",
   consultant: "users",
   upgrade: "lock",
-  run: "play-circle",
+  launch: "calendar",
 };
 
 const DEMO_VIDEO = require("../../assets/videos/ai-subdivision.mp4");
@@ -92,11 +94,13 @@ export function AiSubdivisionIntroModal({
   const { height: winHeight } = useWindowDimensions();
   const [stepIndex, setStepIndex] = useState(0);
   const [showPaymentConfirmation, setShowPaymentConfirmation] = useState(false);
+  // "launch" is deliberately absent — see the StepId note. Re-adding it here is
+  // all that is needed to bring the pre-release notice back.
   const steps = useMemo<StepId[]>(
     () =>
       showUpgradeSlide
-        ? ["planning", "consultant", "upgrade", "run"]
-        : ["planning", "consultant", "run"],
+        ? ["planning", "consultant", "upgrade"]
+        : ["planning", "consultant"],
     [showUpgradeSlide],
   );
 
@@ -108,16 +112,21 @@ export function AiSubdivisionIntroModal({
   }, [visible]);
 
   const step = steps[Math.min(stepIndex, steps.length - 1)] ?? "planning";
-  const isFinal = step === "run";
+  // Whichever slide is last — not a named step — so hiding or restoring a slide
+  // cannot leave the funnel with no way to finish.
+  const isFinal = stepIndex >= steps.length - 1;
 
   const demoMediaMaxHeight = Math.max(150, Math.min(300, winHeight * 0.3));
   const title = t(`site_plan.ai_modal.${step}.title`);
   const body = t(`site_plan.ai_modal.${step}.body`);
-  const primaryLabel = isFinal
-    ? t("site_plan.ai_modal.run_now")
-    : step === "upgrade"
+  // Same precedence as handlePrimary: upgrade wins over isFinal, or the payment
+  // slide would be labelled with the action that comes after it.
+  const primaryLabel =
+    step === "upgrade"
       ? t("site_plan.ai_modal.pay_now")
-      : t("site_plan.ai_modal.next");
+      : isFinal
+        ? t("site_plan.ai_modal.run_now")
+        : t("site_plan.ai_modal.next");
 
   const standardFeatures = [
     t("site_plan.ai_modal.upgrade.f1"),
@@ -125,12 +134,15 @@ export function AiSubdivisionIntroModal({
   ];
 
   const handlePrimary = () => {
-    if (isFinal) {
-      onComplete();
-      return;
-    }
+    // The upgrade slide is checked BEFORE `isFinal`. With the launch slide
+    // hidden, upgrade is the last step for free users, and testing `isFinal`
+    // first would skip the payment confirmation entirely.
     if (step === "upgrade") {
       setShowPaymentConfirmation(true);
+      return;
+    }
+    if (isFinal) {
+      onComplete();
       return;
     }
     setStepIndex((current) => Math.min(current + 1, steps.length - 1));
@@ -138,6 +150,12 @@ export function AiSubdivisionIntroModal({
 
   const confirmPaymentInterest = () => {
     setShowPaymentConfirmation(false);
+    // Upgrade is the final slide once "launch" is hidden, so confirming payment
+    // finishes the funnel rather than advancing to a step that does not exist.
+    if (isFinal) {
+      onComplete();
+      return;
+    }
     setStepIndex((current) => Math.min(current + 1, steps.length - 1));
   };
 

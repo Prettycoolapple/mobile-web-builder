@@ -25,6 +25,8 @@ import Animated, {
 } from "react-native-reanimated";
 import Svg, { Circle, G, Polygon, Polyline } from "react-native-svg";
 
+import { useRouter } from "expo-router";
+
 import { useAuth } from "@/context/AuthContext";
 import type { FeasibilityReport as Report } from "@/context/ChatContext";
 import { useColors } from "@/hooks/useColors";
@@ -440,6 +442,7 @@ function LayerToggleRow({
 export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSubdivisionNonce = 0 }: Props) {
   const colors = useColors();
   const { t } = useT();
+  const router = useRouter();
   const { getApiHeaders, user } = useAuth();
   const { width: viewportWidth } = useWindowDimensions();
   const searchId = report.historyId ?? null;
@@ -498,6 +501,14 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
     [sitePlanSettled, searchId, report.address, centerLat, centerLng],
   );
   const subdivision = useSubdivision(subdivisionTarget);
+
+  // Prefer the address Rubin itself resolved during the gate check — it is the
+  // canonical LINZ form for the parcel, so passing it back avoids Rubin
+  // re-resolving our (possibly differently formatted) string to another property.
+  const rubinAddress =
+    subdivision.siteResult?.supported === true
+      ? subdivision.siteResult.site.address
+      : report.address;
 
   const selectedSubdivisionScenario = useMemo(
     () =>
@@ -727,9 +738,21 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
     const eventPromise = aiInterestEventRef.current;
     setShowAiModal(false);
     aiInterestEventRef.current = null;
-    // The funnel is done — run the real analysis. Fires two parallel scenario
-    // solves; results stream into the panel as each lands.
-    subdivision.start();
+
+    // Funnel done → open Rubin full-screen on this property. Coordinates come
+    // from the site plan already on screen, so Rubin resolves the exact parcel
+    // this report was built from rather than re-geocoding the address string.
+    // No solve is triggered; the user is shown the site.
+    router.push({
+      pathname: "/rubin",
+      params: {
+        address: rubinAddress ?? "",
+        ...(centerLat != null && centerLng != null
+          ? { lat: String(centerLat), lng: String(centerLng) }
+          : {}),
+      },
+    });
+
     if (!eventPromise) return;
     void eventPromise.then(async (eventId) => {
       if (!eventId) return;
@@ -1079,6 +1102,10 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
         </View>
       ) : null}
 
+      {/* DORMANT. Renders nothing until `subdivision.start()` is called, and
+          nothing calls it — tapping "AI Subdivision" opens Rubin full-screen
+          instead. Kept wired so the planned second button ("subdivide"), which
+          will trigger Rubin's solver over the API, only needs that one call. */}
       <SubdivisionPanel state={subdivision} solverVersion={subdivision.solverVersion} />
 
       {query.data ? (

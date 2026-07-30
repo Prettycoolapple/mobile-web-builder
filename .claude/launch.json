@@ -12,6 +12,18 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@workspace/admin-portal", "dev"],
       "port": 5174
+    },
+    {
+      "name": "rubin-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "rubin", "run", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "mobile-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@workspace/mobile", "exec", "expo", "start", "--web", "--port", "8081"],
+      "port": 8081
     }
   ]
 }

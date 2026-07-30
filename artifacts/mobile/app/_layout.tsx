@@ -481,6 +481,8 @@ function RootLayoutNav() {
       <Stack.Screen name="(onboarding)" options={{ headerShown: false }} />
       <Stack.Screen name="add-listing" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="support" options={{ headerShown: false }} />
+      {/* Full-screen Rubin site view; renders its own header + back button. */}
+      <Stack.Screen name="rubin" options={{ headerShown: false }} />
       <Stack.Screen name="my-listings" options={{ headerShown: false }} />
       <Stack.Screen name="explore" options={{ headerShown: false }} />
       <Stack.Screen name="browse" options={{ headerShown: false }} />
