@@ -48,7 +48,11 @@ import { estimateCosts, type CostBreakdown } from "./cost-estimator";
 import { classifySiteCondition } from "./site-condition";
 import { getComparables, type ComparableSale, type ComparablesResult } from "./comparables";
 import { calculateBearBaseBullScenarios, exitGdvTypologyDiscountFactor, nearestHorizonRoiPercent, type ROIScenario } from "./roi-calculator";
-import { isImprovedDwellingComparable, selectComparableSalesForExit } from "./market-comparables";
+import {
+  exitGdvMultiplierForComparableSelection,
+  isImprovedDwellingComparable,
+  selectComparableSalesForExit,
+} from "./market-comparables";
 import { fetchNeighbourhoodContext, type NeighbourhoodContext } from "./neighbourhood-context";
 import { fetchTransportContext, type TransportContext } from "./transport-context";
 import {
@@ -1981,10 +1985,13 @@ export async function runPropertyPipeline(
   // previously hardcoded to 1 (no discount) here and never reached the ROI
   // scenario calc below — only calculateDevelopmentStrategies got the real
   // value — so every multi-lot ROI scenario (and roiPercentBest) was inflated.
-  const gdvTypologyMultiplier = exitGdvTypologyDiscountFactor(
-    merged.zone_code,
-    modelledLotResult.lots,
-    modelledLotResult.sqm_per_lot,
+  const gdvTypologyMultiplier = exitGdvMultiplierForComparableSelection(
+    exitGdvTypologyDiscountFactor(
+      merged.zone_code,
+      modelledLotResult.lots,
+      modelledLotResult.sqm_per_lot,
+    ),
+    comparableSelection.typologyMatched,
   );
   const neighbourhoodGdvMultiplier = neighbourhoodContext?.marketAdjustment.gdvMultiplier ?? 1;
   // Combine both discounts for the ROI scenarios; floor at 0.4 so a poor

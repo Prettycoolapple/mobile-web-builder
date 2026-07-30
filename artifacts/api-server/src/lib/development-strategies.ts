@@ -11,6 +11,7 @@ import {
   type ROIScenario,
 } from "./roi-calculator";
 import type { NeighbourhoodContext } from "./neighbourhood-context";
+import { exitGdvMultiplierForComparableSelection } from "./market-comparables";
 import { roundToNearest } from "./utils";
 
 export type { DevelopmentStrategyId, RefurbishmentScope };
@@ -505,6 +506,20 @@ function buildAssumptions(
         `${packageContext.constructionDiscountPercent}% construction saving applied for coordinated delivery across ${packageContext.siteCount} adjoining package sites. The package also requires higher upfront acquisition capital and coordinated consenting, servicing, and programme management.`,
       );
     }
+    if (hasComparablePricing && classifySiteCondition(data).siteStatus === "vacant_land") {
+      assumptions.push(
+        `GDV is the combined exit value of ${n} completed new dwelling${n === 1 ? "" : "s"}, based on ${
+          typologyMatchedComparables
+            ? "matched small-lot/terrace-style completed-home comparables"
+            : "the best available completed-home comparables"
+        }; vacant-land sales are excluded.`,
+      );
+      if (comparablesQuality === "estimated") {
+        assumptions.push(
+          "Comparable pricing uses current listing asks rather than settled sale prices, so the GDV remains an indicative market estimate.",
+        );
+      }
+    }
     if (data.zone_code && ["CLZ", "LLRZ", "RCSZ", "RUR"].includes(data.zone_code.toUpperCase()) && n > 1) {
       assumptions.push("Rural/countryside title creation may require a transferable rural site right (TDR/TTR); allowance is included for each additional title and must be confirmed at resource consent stage.");
     }
@@ -578,7 +593,10 @@ export function calculateDevelopmentStrategies(params: {
   const refurbScope = effectiveAssessment.refurbish_scope === "none" ? "light" : effectiveAssessment.refurbish_scope;
   const lotIntensityPenalty =
     lotResult.lots >= 7 ? 0.2 : lotResult.lots >= 5 ? 0.16 : lotResult.lots >= 4 ? 0.12 : 0;
-  const exitTypologyMultiplier = params.gdvTypologyMultiplier ?? 1;
+  const exitTypologyMultiplier = exitGdvMultiplierForComparableSelection(
+    params.gdvTypologyMultiplier ?? 1,
+    typologyMatchedComparables === true,
+  );
   const marketGdvMultiplier = Number.isFinite(params.marketGdvMultiplier)
     ? Math.min(1, Math.max(0.9, params.marketGdvMultiplier ?? 1))
     : 1;

@@ -635,6 +635,64 @@ describe("development strategies", () => {
     expect(rebuild?.assumptions.some((a) => /buyer-perception risk/i.test(a))).toBe(true);
   });
 
+  it("removes a generic THAB discount when completed-home comparables already match the proposed product", () => {
+    const vacantData = merged({
+      build_year: null,
+      floor_area_sqm: null,
+      bedrooms: null,
+      bathrooms: null,
+      property_type: "Vacant land / section",
+      zone_code: "THAB",
+      min_lot_size_sqm: 0,
+      land_area_sqm: 171,
+      cv_nzd: 380_000,
+    });
+    const twoLotResult: LotResult = {
+      ...lotResult,
+      lots: 2,
+      min_lot_size: 60,
+      zone_label: "Terrace Housing & Apartments",
+      sqm_per_lot: 86,
+      gross_area_sqm: 171,
+      net_area_sqm: 171,
+    };
+    const assessment = buildFallbackDevelopmentStrategyAssessment(vacantData, twoLotResult);
+    const strategies = calculateDevelopmentStrategies({
+      data: vacantData,
+      baseCosts: {
+        ...baseCosts,
+        land_cv_nzd: 380_000,
+        demo_low: 0,
+        demo_high: 0,
+        demo_vacant: true,
+        has_existing_dwelling: false,
+        units: 2,
+        total_low: 978_000,
+        total_high: 1_295_000,
+      },
+      lotResult: twoLotResult,
+      avgSalePrice: 699_667,
+      avgPricePerSqm: 5_609,
+      interestRateOutlook: "stable",
+      assessment,
+      comparablesQuality: "estimated",
+      gdvTypologyMultiplier: 0.85,
+      typologyMatchedComparables: true,
+    });
+
+    const rebuild = strategies.find((strategy) => strategy.id === "demolish_rebuild");
+    const expectedBasePerLot = estimateGdvPerLot(5_609, 699_667, 86);
+    const expectedYear2PerLot = Math.round(expectedBasePerLot * Math.pow(1.02, 2) / 1000) * 1000;
+
+    expect(rebuild?.roiScenarios[0]?.gdv_per_lot).toBe(expectedYear2PerLot);
+    expect(rebuild?.costItems.some((item) => item.label === "Demolition")).toBe(false);
+    expect(rebuild?.assumptions).toEqual(expect.arrayContaining([
+      expect.stringContaining("combined exit value of 2 completed new dwellings"),
+      expect.stringContaining("vacant-land sales are excluded"),
+      expect.stringContaining("current listing asks rather than settled sale prices"),
+    ]));
+  });
+
   describe("unit/apartment typology resale discount (0.53)", () => {
     const unitData = merged({
       build_year: 1950,

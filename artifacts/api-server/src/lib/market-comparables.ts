@@ -9,6 +9,21 @@ export interface ComparableSelectionResult {
   targetTypology: ComparableTypology;
 }
 
+/**
+ * A generic dense-development discount is only needed when the available
+ * comparables are unlike the proposed exit product. Matching terrace/townhouse
+ * comparables already embody that typology difference, so discounting them
+ * again would understate GDV.
+ */
+export function exitGdvMultiplierForComparableSelection(
+  genericMultiplier: number,
+  typologyMatched: boolean,
+): number {
+  if (typologyMatched) return 1;
+  if (!Number.isFinite(genericMultiplier)) return 1;
+  return Math.min(1, Math.max(0.5, genericMultiplier));
+}
+
 function addressSuggestsUnit(address: string): boolean {
   return /\b(unit|flat|apt|apartment)\b/i.test(address) || /\b\d+\s*\/\s*\d+\b/.test(address);
 }
@@ -38,6 +53,7 @@ export function inferComparableTypology(input: {
 }
 
 export function targetExitTypology(lots: number, sqmPerLot: number): ComparableTypology {
+  if (lots >= 2 && sqmPerLot > 0 && sqmPerLot <= 260) return "terrace_townhouse";
   if (lots >= 3 && sqmPerLot > 0 && sqmPerLot <= 320) return "terrace_townhouse";
   if (lots >= 4) return "terrace_townhouse";
   return "standalone";
