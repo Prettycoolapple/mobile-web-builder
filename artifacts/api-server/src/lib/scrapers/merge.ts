@@ -1106,31 +1106,60 @@ export function mergePropertyData(
     }
   }
 
-  // Active listing facts have already won above. For off-market profiles use
-  // a strict modal result across address-matched sources, making the answer
-  // stable when one scraper is temporarily unavailable or parses a bad value.
+  // Active listing facts have already won above. For off-market properties,
+  // retain a room count published on the exact realestate.co.nz subject page.
+  // A modal vote from lagging secondary databases must not replace the value
+  // users can inspect directly (19 Queen Street is one example: exact page 2
+  // bedrooms, several secondary feeds 3). If the exact page omits a field,
+  // fall back to strict address-matched consensus for stability.
   if (!hasActiveDwellingListing) {
-    const bedroomConsensus = roomCountConsensus("Bedrooms", bedrooms, sources["bedrooms"], [
-      { src: "realestate.co.nz property profile", value: realestateListing?.bedrooms },
-      { src: "homes", value: homesBeds },
-      { src: "qv", value: qvBeds },
-      { src: "oneroof", value: oneroofProfileBeds },
-      { src: "propertyvalue", value: propertyValueBeds },
-    ]);
-    if (bedroomConsensus.note) discrepancies.push(bedroomConsensus.note);
-    if (bedroomConsensus.source) sources["bedrooms"] = bedroomConsensus.source;
-    bedrooms = bedroomConsensus.value;
+    const exactProfileBedrooms = positiveRoomCount(realestateListing?.bedrooms);
+    if (exactProfileBedrooms != null) {
+      const otherBedrooms = [homesBeds, qvBeds, oneroofProfileBeds, propertyValueBeds]
+        .map(positiveRoomCount)
+        .filter((value): value is number => value != null);
+      bedrooms = exactProfileBedrooms;
+      sources["bedrooms"] = "realestate.co.nz property profile";
+      if (otherBedrooms.some((value) => value !== exactProfileBedrooms)) {
+        discrepancies.push(
+          `Bedrooms: the exact realestate.co.nz property profile reports ${exactProfileBedrooms}, while one or more secondary property records disagree. Using the exact subject page.`,
+        );
+      }
+    } else {
+      const bedroomConsensus = roomCountConsensus("Bedrooms", bedrooms, sources["bedrooms"], [
+        { src: "homes", value: homesBeds },
+        { src: "qv", value: qvBeds },
+        { src: "oneroof", value: oneroofProfileBeds },
+        { src: "propertyvalue", value: propertyValueBeds },
+      ]);
+      if (bedroomConsensus.note) discrepancies.push(bedroomConsensus.note);
+      if (bedroomConsensus.source) sources["bedrooms"] = bedroomConsensus.source;
+      bedrooms = bedroomConsensus.value;
+    }
 
-    const bathroomConsensus = roomCountConsensus("Bathrooms", bathrooms, sources["bathrooms"], [
-      { src: "realestate.co.nz property profile", value: realestateListing?.bathrooms },
-      { src: "homes", value: homesBaths },
-      { src: "qv", value: qvBaths },
-      { src: "oneroof", value: oneroofProfileBaths },
-      { src: "propertyvalue", value: propertyValueBaths },
-    ]);
-    if (bathroomConsensus.note) discrepancies.push(bathroomConsensus.note);
-    if (bathroomConsensus.source) sources["bathrooms"] = bathroomConsensus.source;
-    bathrooms = bathroomConsensus.value;
+    const exactProfileBathrooms = positiveRoomCount(realestateListing?.bathrooms);
+    if (exactProfileBathrooms != null) {
+      const otherBathrooms = [homesBaths, qvBaths, oneroofProfileBaths, propertyValueBaths]
+        .map(positiveRoomCount)
+        .filter((value): value is number => value != null);
+      bathrooms = exactProfileBathrooms;
+      sources["bathrooms"] = "realestate.co.nz property profile";
+      if (otherBathrooms.some((value) => value !== exactProfileBathrooms)) {
+        discrepancies.push(
+          `Bathrooms: the exact realestate.co.nz property profile reports ${exactProfileBathrooms}, while one or more secondary property records disagree. Using the exact subject page.`,
+        );
+      }
+    } else {
+      const bathroomConsensus = roomCountConsensus("Bathrooms", bathrooms, sources["bathrooms"], [
+        { src: "homes", value: homesBaths },
+        { src: "qv", value: qvBaths },
+        { src: "oneroof", value: oneroofProfileBaths },
+        { src: "propertyvalue", value: propertyValueBaths },
+      ]);
+      if (bathroomConsensus.note) discrepancies.push(bathroomConsensus.note);
+      if (bathroomConsensus.source) sources["bathrooms"] = bathroomConsensus.source;
+      bathrooms = bathroomConsensus.value;
+    }
   }
 
   // OneRoof property page often shows the year agents use in marketing; prefer it when it

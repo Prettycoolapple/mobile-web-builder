@@ -162,6 +162,11 @@ export function buildDevScoreNotice(
   locale: Locale = "en",
 ): string | null {
   if (!report || !hasNoDevelopmentScore(report)) return null;
+  if (report["score_unavailable_reason"] === "non_residential_business_zone") {
+    return locale === "zh"
+      ? "该物业没有开发评分，因为 Project Alpha 目前只支持住宅分区的开发与分割可行性分析；商业及商务用途的开发或分割不在现有模型范围内。"
+      : "This property doesn't have a development score because Project Alpha currently supports residential-zoned development and subdivision only; business and commercial development or subdivision are outside the current model.";
+  }
   return locale === "zh"
     ? "该物业暂无开发评分。这有时是因为该地块的部分规划或物业数据暂时不足，也可能反映其分割或开发潜力较为有限——建议您联系专业开发顾问，以确认可行的方案。"
     : "This property doesn't have a development score. Sometimes this simply means we don't yet have enough data for the site, though it can also indicate limited subdivision or development potential — we recommend getting in touch with a specialist consultant to confirm what's achievable.";

@@ -4,7 +4,10 @@ import { logger } from "./logger";
 const STREET_TYPE =
   "(?:road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|mews|quay|boulevard|highway|motorway|esplanade|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)";
 
-const STREET_NUMBER = "(?:[A-Za-z]?\\d+[A-Za-z]?\\s*/\\s*)?\\d+[A-Za-z]?";
+const BASE_STREET_NUMBER = "\\d+[A-Za-z]?";
+const STREET_NUMBER =
+  `(?:[A-Za-z]?${BASE_STREET_NUMBER}\\s*/\\s*)?${BASE_STREET_NUMBER}` +
+  `(?:\\s*[-–—]\\s*${BASE_STREET_NUMBER})?`;
 
 const NZ_ADDRESS_REGEX =
   new RegExp(
@@ -22,6 +25,10 @@ function cleanAddress(raw: string): string {
   return raw
     .replace(/[，]/g, ",")
     .replace(/\s+/g, " ")
+    // Canonicalise only numeric address ranges. This makes "39-43" and
+    // "39 - 43" the same package/cache key without changing hyphenated road
+    // names such as Coatesville-Riverhead Highway.
+    .replace(/(\d+[a-z]?)\s*[-–—]\s*(\d+[a-z]?)/gi, "$1-$2")
     .replace(/\s*,\s*/g, ", ")
     .trim()
     .replace(/[.;!?，。]+$/g, "");
@@ -57,14 +64,19 @@ function commaLocalityTail(message: string, matchEnd: number): string | null {
 
 function streetLineText(raw: string): string {
   const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
-  if (parts.length >= 2 && /^(?:[a-z]?\d+[a-z]?\s*\/\s*)?\d+[a-z]?$/i.test(parts[0]!)) {
+  if (
+    parts.length >= 2 &&
+    /^(?:[a-z]?\d+[a-z]?\s*\/\s*)?\d+[a-z]?(?:\s*[-–—]\s*\d+[a-z]?)?$/i.test(parts[0]!)
+  ) {
     return `${parts[0]} ${parts[1]}`;
   }
   return parts[0] ?? raw;
 }
 
 function hasNumberedStreetLine(raw: string): boolean {
-  return /^(?:[a-z]?\d+[a-z]?\s*\/\s*)?\d+[a-z]?\s+.*[\p{L}]/iu.test(streetLineText(raw));
+  return /^(?:[a-z]?\d+[a-z]?\s*\/\s*)?\d+[a-z]?(?:\s*[-–—]\s*\d+[a-z]?)?\s+.*[\p{L}]/iu.test(
+    streetLineText(raw),
+  );
 }
 
 function isPlausibleAddress(raw: string): boolean {

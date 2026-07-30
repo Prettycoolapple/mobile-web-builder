@@ -177,6 +177,16 @@ describe("no-development-score specialist notice", () => {
     expect(notice).toContain("specialist consultant");
   });
 
+  it("explains that business and commercial zones are outside the residential model", () => {
+    const notice = buildDevScoreNotice(
+      { score_unavailable_reason: "non_residential_business_zone", scores: null },
+      "en",
+    );
+    expect(notice).toContain("supports residential-zoned");
+    expect(notice).toContain("business and commercial development or subdivision are outside");
+    expect(notice).not.toContain("don't yet have enough data");
+  });
+
   it("returns the notice when the scores object itself is null", () => {
     expect(buildDevScoreNotice({ scores: null }, "en")).not.toBeNull();
   });

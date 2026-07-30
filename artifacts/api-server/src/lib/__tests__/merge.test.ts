@@ -228,10 +228,10 @@ describe("mergePropertyData", () => {
     expect(merged.data_sources.land_area_sqm).toBe("linz_lrs_title");
     expect(merged.bedrooms).toBe(2);
     expect(merged.bathrooms).toBe(2);
-    expect(merged.data_sources.bedrooms).toBe("realestate.co.nz");
+    expect(merged.data_sources.bedrooms).toBe("realestate.co.nz property profile");
     expect(merged.discrepancies).toEqual(expect.arrayContaining([
       expect.stringContaining("complete property-level area"),
-      expect.stringContaining("Bedrooms: address-matched off-market records disagree"),
+      expect.stringContaining("exact realestate.co.nz property profile reports 2"),
     ]));
   });
 
@@ -1379,5 +1379,60 @@ describe("mergePropertyData", () => {
     });
     expect(merged.data_sources.build_year).toBe("realestate.co.nz property profile");
     expect(merged.data_sources.cv_nzd).toBe("realestate.co.nz property profile");
+  });
+
+  it("keeps an exact property-page bedroom count over lagging off-market database consensus", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 1_253 } as any,
+      null,
+      null,
+      { zone_code: "SHZ", zone_description: "Single House Zone", min_lot_size_sqm: 600 } as any,
+      [],
+      {
+        contour: "flat",
+        asbestos_risk: "high",
+        infrastructure: [],
+        analysed_address: "19 Queen Street, Riverhead",
+        realestate_listing: {
+          address: "19 Queen Street, Riverhead, Rodney, Auckland",
+          listingUrl: "https://www.realestate.co.nz/property/19-queen-street-riverhead-rodney-auckland/9nn7d6g2c",
+          listingStatus: "property_profile",
+          price: null,
+          priceText: "",
+          landArea: 1_253,
+          floorArea: 80,
+          propertyType: "House",
+          photoUrl: null,
+          zone: null,
+          bedrooms: 2,
+          bathrooms: null,
+          buildYear: 1970,
+          cvNzd: 1_225_000,
+          cvYear: 2024,
+        },
+        homes: {
+          bedrooms: 3,
+          bathrooms: 1,
+          address_confirmed: "19 Queen Street, Riverhead, Auckland",
+        } as any,
+        qv: {
+          bedrooms: 3,
+          bathrooms: 1,
+          address_confirmed: "19 Queen Street, Riverhead, Auckland",
+        } as any,
+        propertyValue: {
+          bedrooms: 3,
+          bathrooms: 1,
+          address_confirmed: "19 Queen Street, Riverhead, Auckland",
+        } as any,
+      },
+    );
+
+    expect(merged.bedrooms).toBe(2);
+    expect(merged.bathrooms).toBe(1);
+    expect(merged.data_sources.bedrooms).toBe("realestate.co.nz property profile");
+    expect(merged.discrepancies).toEqual(expect.arrayContaining([
+      expect.stringContaining("exact realestate.co.nz property profile reports 2"),
+    ]));
   });
 });

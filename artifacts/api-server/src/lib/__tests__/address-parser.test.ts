@@ -36,6 +36,22 @@ describe("NZ address extraction", () => {
     ).resolves.toBe("1/289 Ulster Street, Whitiora");
   });
 
+  it.each([
+    "Analyse 39-43 Auranga Drive, Karaka",
+    "Analyse 39 - 43 Auranga Drive, Karaka",
+    "Analyse 39 – 43 Auranga Drive, Karaka",
+  ])("preserves and canonicalises a packaged numeric address range: %s", async (message) => {
+    await expect(extractNZAddress(message)).resolves.toBe(
+      "39-43 Auranga Drive, Karaka",
+    );
+  });
+
+  it("does not alter a hyphenated road name while canonicalising an address range", async () => {
+    await expect(
+      extractNZAddress("Analyse 1058 Coatesville-Riverhead Highway, Riverhead"),
+    ).resolves.toBe("1058 Coatesville-Riverhead Highway, Riverhead");
+  });
+
   it("preserves selected Queenstown locality context so direct analysis is not re-disambiguated", async () => {
     await expect(extractNZAddress("102 Thompson Street, Queenstown 9300, New Zealand")).resolves.toBe(
       "102 Thompson Street, Queenstown 9300, New Zealand",
