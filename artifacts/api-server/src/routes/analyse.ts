@@ -53,6 +53,7 @@ import { dwellingConditionRiskBullet } from "../lib/dwelling-condition";
 import { noteUserActivity } from "../lib/user-activity";
 import { isSubdivisionLayoutRequest } from "../lib/subdivision-layout-intent";
 import { buildSubdivisionPathwayNote } from "../lib/lot-calculator";
+import { isAucklandBusinessZone } from "../lib/auckland-zone-classification";
 import {
   canonicalBuildYearFromReport,
   filterRiskSummaryRemoveAsbestosBullets,
@@ -935,6 +936,7 @@ function applyDeterministicPipelineOverrides(
   const scenarios = pipelineResult.scenarios ?? [];
   const comparables = pipelineResult.comparables ?? [];
   const developmentStrategies = pipelineResult.developmentStrategies ?? [];
+  const residentialYieldApplicable = !isAucklandBusinessZone(merged?.zone_code);
 
   if (merged) {
     parsed.data_sources = merged.data_sources ?? {};
@@ -957,7 +959,9 @@ function applyDeterministicPipelineOverrides(
   }
 
   if (lots) {
-    parsed.potential_lots = lots.lots;
+    // Keep a numeric top-level value for backward compatibility, but do not
+    // expose it as a residential subdivision yield for business/centre zones.
+    parsed.potential_lots = residentialYieldApplicable ? lots.lots : 0;
     parsed.zone_label = lots.zone_label;
 
     // Keep propertyOverview.zone in sync with the authoritative deterministic zone_label.
@@ -990,8 +994,8 @@ function applyDeterministicPipelineOverrides(
       // propagates into the planning section and contradicts the zone shown in the
       // property overview and the deterministic subdivision pathway note.
       zone: lots.zone_label,
-      potentialLots: lots.lots,
-      standardVacantLots: pathway?.standardVacantLots ?? lots.lots,
+      potentialLots: residentialYieldApplicable ? lots.lots : undefined,
+      standardVacantLots: residentialYieldApplicable ? pathway?.standardVacantLots ?? lots.lots : undefined,
       standardPathViable: pathway?.standardPathViable ?? pathway?.standard_path_viable ?? false,
       standardMinLotSize: pathway?.standardMinLotSize ?? (lots.min_lot_size > 0 ? lots.min_lot_size : null),
       designLedEligible: pathway?.designLedEligible ?? false,
@@ -1289,6 +1293,8 @@ function applyDeterministicPipelineOverrides(
   } else {
     delete parsed.scores;
   }
+  parsed.score_unavailable_reason =
+    pipelineResult.raw_property?.derived_scores?.scoreUnavailableReason ?? null;
 
   sanitizeReportScoresReasons(parsed.scores as Record<string, unknown> | undefined);
 }
@@ -1307,6 +1313,7 @@ function buildDeterministicFallbackReport(
   if (!merged || !lots) return null;
 
   const zoneLabel = lots.zone_label || merged.zone_description || merged.zone_code || "Unknown zone";
+  const residentialYieldApplicable = !isAucklandBusinessZone(merged.zone_code);
   const minLotSize = lots.min_lot_size ? `${lots.min_lot_size}m2` : null;
   const siteCondition = classifySiteCondition(merged);
   const riskSeed = [
@@ -1339,8 +1346,10 @@ function buildDeterministicFallbackReport(
     planning: {
       zone: zoneLabel,
       minLotSize,
-      potentialLots: lots.lots,
-      standardVacantLots: pipelineResult.subdivision_pathway?.standardVacantLots ?? lots.lots,
+      potentialLots: residentialYieldApplicable ? lots.lots : undefined,
+      standardVacantLots: residentialYieldApplicable
+        ? pipelineResult.subdivision_pathway?.standardVacantLots ?? lots.lots
+        : undefined,
       standardPathViable: pipelineResult.subdivision_pathway?.standardPathViable ?? pipelineResult.subdivision_pathway?.standard_path_viable ?? false,
       standardMinLotSize: pipelineResult.subdivision_pathway?.standardMinLotSize ?? (lots.min_lot_size > 0 ? lots.min_lot_size : null),
       designLedEligible: pipelineResult.subdivision_pathway?.designLedEligible ?? false,
@@ -1362,7 +1371,7 @@ function buildDeterministicFallbackReport(
       subdivisionSummary: pipelineResult.subdivision_pathway?.headline ?? null,
       subdivisionPathwayNote: pipelineResult.subdivision_pathway?.detail ?? null,
     },
-    potential_lots: lots.lots,
+    potential_lots: residentialYieldApplicable ? lots.lots : 0,
     zone_label: zoneLabel,
     cv_unavailable: costs?.cv_unavailable ?? merged.cv_nzd == null,
     total_excludes_land: costs?.total_excludes_land ?? false,

@@ -44,6 +44,23 @@ describe("lot calculator", () => {
     expect(note.headline).toContain("Zone unavailable");
   });
 
+  it("does not turn a Local Centre business zone into residential 60sqm lots", () => {
+    const result = calculatePotentialLots(1_381, "LCZ");
+    const note = buildSubdivisionPathwayNote(
+      result.net_area_sqm,
+      "LCZ",
+      result.lots,
+      result.min_lot_size,
+      result.zone_label,
+    );
+
+    expect(result.lots).toBe(1);
+    expect(result.min_lot_size).toBe(200);
+    expect(note.standard_path_viable).toBe(false);
+    expect(note.headline).toContain("residential standard-lot yield is not applicable");
+    expect(note.detail).toContain("business or centre zone");
+  });
+
   it("explains zone minimums without inventing a site area when land area is unavailable", () => {
     const note = buildSubdivisionPathwayNote(null, "MHS", 1, 400, "Mixed Housing Suburban");
 

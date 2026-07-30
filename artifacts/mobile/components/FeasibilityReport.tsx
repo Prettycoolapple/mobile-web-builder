@@ -654,6 +654,10 @@ function scoreUnavailableVerdict(reason: string | null | undefined, locale: stri
       return isZh
         ? "该房产的单元房或交叉租赁产权信号不符合独立土地分割评分模型，因此未生成开发评分。"
         : "Development scores aren't produced because unit or cross-lease title signals do not fit the standalone subdivision model.";
+    case "non_residential_business_zone":
+      return isZh
+        ? "该地块位于商业或中心区，不适用本系统的标准住宅空地分割模型，因此不显示开发评分。住宅或混合用途方案需要规划师进行针对性评估。"
+        : "Development scores aren't produced because this business or centre-zone property is outside the standard residential vacant-lot subdivision model. A planner should assess any residential or mixed-use proposal.";
     case "no_comparable_sales":
     case "missing_comparable_sales":
       return isZh

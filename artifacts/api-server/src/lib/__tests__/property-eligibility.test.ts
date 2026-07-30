@@ -776,3 +776,25 @@ describe("redeveloped-parcel land-area suppression", () => {
     expect(result.subdivisionRejectReason).toBeNull();
   });
 });
+
+describe("business-zone residential subdivision guard", () => {
+  it("rejects Local Centre sites from the standard residential model and forces a single displayed parcel", () => {
+    const result = assessPropertyEligibility({
+      address: "1058 Coatesville-Riverhead Highway, Riverhead, Auckland",
+      estateType: "Fee Simple",
+      verifiedEstateType: "Fee Simple",
+      legalDescription: "Lot 1 DP 12345",
+      propertyType: "COMMERCIAL",
+      landAreaSqm: 1_381,
+      floorAreaSqm: 138,
+      buildYear: 1960,
+      zoneCode: "LCZ",
+      potentialLots: 6,
+      minLotSize: 200,
+    });
+
+    expect(result.subdivisionEligible).toBe(false);
+    expect(result.subdivisionRejectReason).toBe("non_residential_business_zone");
+    expect(shouldForceSingleLotForEligibility(result)).toBe(true);
+  });
+});

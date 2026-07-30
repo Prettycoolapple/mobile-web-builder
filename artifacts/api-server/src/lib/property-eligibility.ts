@@ -1,6 +1,7 @@
 import type { LinzParcel } from "./linz";
 import type { ListingClaims } from "./listing-claims";
 import { looksLikeUnitOrApartmentAddress } from "./address-patterns";
+import { isAucklandBusinessZone } from "./auckland-zone-classification";
 
 export type PropertyTypology = "standalone" | "terrace_townhouse" | "unit_apartment" | "unknown";
 export type PropertyEligibilityConfidence = "verified" | "inferred" | "unknown";
@@ -314,6 +315,7 @@ export function assessPropertyEligibility(input: PropertyEligibilityInput): Prop
   // doctrine, regardless of what (lagging) council records say.
   else if (claimsNewBuild) subdivisionRejectReason = "listing_claims_new_build";
   else if (claims?.multiUnitDevelopment) subdivisionRejectReason = "listing_claims_multi_unit_development";
+  else if (isAucklandBusinessZone(input.zoneCode)) subdivisionRejectReason = "non_residential_business_zone";
   else if (!tenureWaived && (!titleIsFreehold || titleConfidence !== "verified")) subdivisionRejectReason = "title_not_confirmed_freehold";
   else if (!tenureWaived && typology !== "standalone") subdivisionRejectReason = "typology_not_confirmed_standalone";
   else if (!tenureWaived && landAreaParentOrTypologySuspect) subdivisionRejectReason = "land_area_parent_or_typology_suspect";
@@ -343,7 +345,8 @@ export function shouldForceSingleLotForEligibility(result: PropertyEligibilityRe
     || result.subdivisionRejectReason === "typology_not_confirmed_standalone"
     || result.subdivisionRejectReason === "land_area_parent_or_typology_suspect"
     || result.subdivisionRejectReason === "listing_claims_new_build"
-    || result.subdivisionRejectReason === "listing_claims_multi_unit_development";
+    || result.subdivisionRejectReason === "listing_claims_multi_unit_development"
+    || result.subdivisionRejectReason === "non_residential_business_zone";
 }
 
 export function shouldSuppressParentLandAreaForEligibility(result: PropertyEligibilityResult): boolean {
@@ -420,6 +423,9 @@ export function resolveSubjectLandAreaForEligibility(input: SubjectLandAreaInput
 
 export function eligibilityPlanningNote(result: PropertyEligibilityResult): string | null {
   if (!shouldForceSingleLotForEligibility(result)) return null;
+  if (result.subdivisionRejectReason === "non_residential_business_zone") {
+    return "This business or centre-zone property is outside the standard residential vacant-lot subdivision model. Residential or mixed-use development may still be possible, but a planner must test the intended building and subdivision together against the applicable business-zone controls.";
+  }
   if (result.subdivisionRejectReason === "unit_or_crosslease_signal") {
     return "Unit title, cross-lease, stratum, or unit-like signals were detected, so this report does not treat the property as a standard standalone freehold subdivision site. Confirm the exact title and legal description before relying on any subdivision yield.";
   }

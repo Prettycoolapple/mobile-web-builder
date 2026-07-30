@@ -6,6 +6,7 @@ import { normaliseDiscoveryAddressKey } from "./address-key";
 import { SCORING_VERSION, type DerivedCardScores } from "./card-score";
 import type { BuiltEnvironmentContext } from "./built-environment-context";
 import { looksLikeUnitOrApartmentAddress } from "./address-patterns";
+import { isAucklandBusinessZone } from "./auckland-zone-classification";
 
 export interface CardScoreEntry {
   status: "pending" | "ready" | "failed";
@@ -126,7 +127,15 @@ async function resolveCardScore(
   }
   const unavailableReason = cardScoreUnavailableReason(c);
   if (unavailableReason) return { result: null, source: "estimate", unavailableReason };
-  return { result: await computeLightScore(c), source: "estimate" };
+  const result = await computeLightScore(c);
+  if (isAucklandBusinessZone(result.zone)) {
+    return {
+      result: null,
+      source: "estimate",
+      unavailableReason: "non_residential_business_zone",
+    };
+  }
+  return { result, source: "estimate" };
 }
 
 export function queueBackgroundScores(candidates: LightScoreInput[]): void {

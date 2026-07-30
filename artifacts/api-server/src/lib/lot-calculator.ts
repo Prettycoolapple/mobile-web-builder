@@ -1,3 +1,5 @@
+import { isAucklandBusinessZone } from "./auckland-zone-classification";
+
 export interface LotResult {
   lots: number;
   min_lot_size: number;
@@ -62,17 +64,18 @@ const ZONE_RULES: Record<string, { min_lot_sqm: number; label: string }> = {
   FUZ:  { min_lot_sqm: 600,  label: "Future Urban Zone" },
   MIX:  { min_lot_sqm: 200,  label: "Mixed Use" },
   MUZ:  { min_lot_sqm: 200,  label: "Business - Mixed Use Zone" },
+  BMU:  { min_lot_sqm: 200,  label: "Business - Mixed Use Zone" },
   LSZ:  { min_lot_sqm: 1200, label: "Large Lot" },
   RUR:  { min_lot_sqm: 40000, label: "Rural" },
-  CCZ:  { min_lot_sqm: 0,    label: "City Centre Zone" },
-  TCZ:  { min_lot_sqm: 0,    label: "Town Centre Zone" },
-  MCZ:  { min_lot_sqm: 0,    label: "Metropolitan Centre Zone" },
-  LCZ:  { min_lot_sqm: 0,    label: "Local Centre Zone" },
-  NCZ:  { min_lot_sqm: 0,    label: "Neighbourhood Centre Zone" },
-  GBZ:  { min_lot_sqm: 0,    label: "General Business Zone" },
-  BPZ:  { min_lot_sqm: 0,    label: "Business Park Zone" },
-  BPIZ: { min_lot_sqm: 0,    label: "Light Industry Zone" },
-  HIZ:  { min_lot_sqm: 0,    label: "Heavy Industry Zone" },
+  CCZ:  { min_lot_sqm: 200,  label: "City Centre Zone" },
+  TCZ:  { min_lot_sqm: 200,  label: "Town Centre Zone" },
+  MCZ:  { min_lot_sqm: 200,  label: "Metropolitan Centre Zone" },
+  LCZ:  { min_lot_sqm: 200,  label: "Local Centre Zone" },
+  NCZ:  { min_lot_sqm: 200,  label: "Neighbourhood Centre Zone" },
+  GBZ:  { min_lot_sqm: 200,  label: "General Business Zone" },
+  BPZ:  { min_lot_sqm: 1000, label: "Business Park Zone" },
+  BPIZ: { min_lot_sqm: 1000, label: "Light Industry Zone" },
+  HIZ:  { min_lot_sqm: 2000, label: "Heavy Industry Zone" },
 };
 
 const UNKNOWN_ZONE = { min_lot_sqm: 0, label: "Unknown zone" };
@@ -139,6 +142,9 @@ export function assessSubdivisionPathways(input: DesignLedAssessmentInput): Subd
     designLedBlockers: blockers,
   };
 
+  if (isAucklandBusinessZone(zoneCode)) {
+    blockers.push("Business and centre zones are outside the automated residential vacant-lot subdivision model.");
+  }
   if (!zoneCode || !minLotSqm) blockers.push("Zoning or minimum lot-size rule is unavailable.");
   const designRule = zoneCode ? DESIGN_LED_ZONE_RULES[zoneCode] : undefined;
   if (!designRule) blockers.push("Design-led upside is currently only modelled for Auckland MHS, MHU, and THAB residential zones.");
@@ -311,6 +317,15 @@ export function buildSubdivisionPathwayNote(
     };
   }
 
+  if (isAucklandBusinessZone(zone_code)) {
+    return {
+      headline: `${zone_label} - automated residential standard-lot yield is not applicable.`,
+      detail: `This property is in ${zone_label}, which is a business or centre zone. Residential or mixed-use development may still be possible under the zone's activity controls, but it must be tested through a site-specific building and planning assessment. Project Alpha's standard residential vacant-lot calculator does not infer a residential lot count for this zone.`,
+      standard_path_viable: false,
+      ...assessmentFields,
+    };
+  }
+
   if (min_lot_sqm <= 0) {
     return {
       headline: `${zone_label} — no minimum lot size. Multiple lots possible.`,
@@ -414,6 +429,17 @@ export function calculatePotentialLots(
   }
 
   const min = zone.min_lot_sqm;
+  if (isAucklandBusinessZone(zone_code)) {
+    return {
+      lots: 1,
+      min_lot_size: min,
+      zone_label: zone.label,
+      sqm_per_lot: Math.round(netArea || grossArea || 0),
+      gross_area_sqm: grossArea,
+      net_area_sqm: netArea,
+      easement_area_sqm,
+    };
+  }
   const effectiveMin = min === 0 ? 60 : min;
 
   const roundingTolerance = 0.000001;

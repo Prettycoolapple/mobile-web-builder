@@ -53,6 +53,21 @@ describe("developmentScoreUnavailableReason", () => {
     expect(developmentScoreUnavailableReason(merged(), costs(), scenarios)).toBeNull();
   });
 
+  it("suppresses residential development scoring for Auckland business zones", () => {
+    expect(
+      developmentScoreUnavailableReason(
+        merged({
+          zone_code: "LCZ",
+          zone_description: "Business - Local Centre Zone",
+          property_type: "COMMERCIAL",
+          subdivisionRejectReason: "non_residential_business_zone",
+        }),
+        costs(),
+        scenarios,
+      ),
+    ).toBe("non_residential_business_zone");
+  });
+
   it("keeps incomplete valuation, build-year, and contour data as caveats rather than suppressing all scores", () => {
     expect(developmentScoreUnavailableReason(merged({ cv_nzd: null }), costs({ cv_unavailable: true }), scenarios)).toBeNull();
     expect(developmentScoreUnavailableReason(merged({ contour: null }), costs(), scenarios)).toBeNull();

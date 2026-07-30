@@ -84,6 +84,7 @@ import {
   shouldForceSingleLotForEligibility,
   shouldSuppressParentLandAreaForEligibility,
 } from "./property-eligibility";
+import { isAucklandBusinessZone } from "./auckland-zone-classification";
 import { extractListingClaims, detectRedevelopmentConflict, hasAmbiguousListingSignals, type ListingClaims } from "./listing-claims";
 import { extractListingClaimsLLM, mergeClaimsSafer } from "./listing-claims-llm";
 import { looksLikeUnitOrApartmentAddress } from "./address-patterns";
@@ -573,6 +574,7 @@ export function developmentScoreUnavailableReason(
   _scenarios: ROIScenario[],
 ): string | null {
   if (merged.typology === "unit_apartment") return "unit_or_apartment_typology";
+  if (isAucklandBusinessZone(merged.zone_code)) return "non_residential_business_zone";
   if (merged.subdivisionRejectReason === "unit_or_crosslease_signal" && merged.typology !== "standalone") {
     return "unit_or_crosslease_signal";
   }
@@ -1741,7 +1743,13 @@ export async function runPropertyPipeline(
   const eligibilityNote = eligibilityPlanningNote(eligibility);
   if (eligibilityNote) {
     subdivisionPathway.detail = `${subdivisionPathway.detail} ${eligibilityNote}`;
-    subdivisionPathway.headline = lotResult.lots <= 1
+    const titleVerificationRequired = new Set([
+      "unit_or_crosslease_signal",
+      "title_not_confirmed_freehold",
+      "typology_not_confirmed_standalone",
+      "land_area_parent_or_typology_suspect",
+    ]).has(eligibility.subdivisionRejectReason ?? "");
+    subdivisionPathway.headline = lotResult.lots <= 1 && titleVerificationRequired
       ? `${subdivisionPathway.headline} Title/typology verification required.`
       : subdivisionPathway.headline;
   }

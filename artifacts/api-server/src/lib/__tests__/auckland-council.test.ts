@@ -41,4 +41,13 @@ describe("unitary plan zone mapping", () => {
       raw_zone: "3",
     });
   });
+
+  it("maps Local Centre to the E38 business-zone vacant-site standard", () => {
+    expect(zoneResultFromRawCode(7)).toEqual({
+      zone_code: "LCZ",
+      zone_description: "Business - Local Centre Zone",
+      min_lot_size_sqm: 200,
+      raw_zone: "7",
+    });
+  });
 });
