@@ -9,12 +9,20 @@ export function isCombinedPackageAnalyseRequest(text: string): boolean {
   if (!text?.trim()) return false;
   const hasPackageSignal =
     /combined\s+(listing\s+)?package|full\s+package|package\s+analysis|analyse\s+.*package|analyze\s+.*package/i.test(text) ||
+    /\b(?:analyse|analyze|assess|evaluate|buy|purchase)\b[\s\S]{0,100}\b(?:all|both)\b[\s\S]{0,80}\b(?:properties|sites|lots|titles|parcels)\b/i.test(text) ||
+    /\b(?:properties|sites|lots|titles|parcels)\b[\s\S]{0,80}\b(?:sold|offered|marketed|analysed|analyzed)\s+together\b/i.test(text) ||
+    /\b(?:all\s+(?:two|three|four|five|\d+)|both)\b[\s\S]{0,50}\b(?:together|combined)\b/i.test(text) ||
     /组合|完整组合|打包|整包|組合|完整組合/.test(text);
   if (!hasPackageSignal) return false;
   const hasMultiAddressSignal =
     /\b\d+[a-z]?\s+[^,&+]+(?:street|st|road|rd|avenue|ave|place|pl|drive|dr|terrace|tce|crescent|cres)\b[\s\S]{0,80}(?:&|\+| and | 和 |及)[\s\S]{0,80}\b\d+[a-z]?\s+[^,&+]+(?:street|st|road|rd|avenue|ave|place|pl|drive|dr|terrace|tce|crescent|cres)\b/i.test(text) ||
     /\b\d+[a-z]?\s+[^,&+]+(?:street|st|road|rd|avenue|ave|place|pl|drive|dr|terrace|tce|crescent|cres)\b[\s\S]{0,80}(?:&|\+| and | 和 |及)\s*\d+[a-z]?\b/i.test(text);
-  return hasMultiAddressSignal || /组合|整包|打包|組合/.test(text) || /package/i.test(text);
+  const hasNumberRangeSignal =
+    /\b\d+[a-z]?\s*[-\u2013\u2014]\s*\d+[a-z]?\b/i.test(text);
+  return hasMultiAddressSignal ||
+    hasNumberRangeSignal ||
+    /组合|整包|打包|組合/.test(text) ||
+    /package/i.test(text);
 }
 
 /**

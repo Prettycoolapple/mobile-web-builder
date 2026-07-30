@@ -305,6 +305,40 @@ describe("realestate-api combined listing detection", () => {
     });
   });
 
+  it("keeps a spaced range and an unpunctuated locality as a valid package address", () => {
+    expect(extractCombinedListingAddressParts("39 - 43 Auranga Drive Karaka")).toEqual({
+      packageAddress: "39 - 43 Auranga Drive, Karaka",
+      childAddresses: [
+        "39 Auranga Drive, Karaka",
+        "41 Auranga Drive, Karaka",
+        "43 Auranga Drive, Karaka",
+      ],
+    });
+  });
+
+  it("removes natural-language package intent from the locality suffix", () => {
+    expect(extractCombinedListingAddressParts(
+      "Please analyse all three properties at 39 \u2013 43 Auranga Drive, Karaka together",
+    )).toEqual({
+      packageAddress: "39 \u2013 43 Auranga Drive, Karaka",
+      childAddresses: [
+        "39 Auranga Drive, Karaka",
+        "41 Auranga Drive, Karaka",
+        "43 Auranga Drive, Karaka",
+      ],
+    });
+    expect(extractCombinedListingAddressParts(
+      "Analyse 39 - 43 Auranga Drive Karaka as a package",
+    )).toEqual({
+      packageAddress: "39 - 43 Auranga Drive, Karaka",
+      childAddresses: [
+        "39 Auranga Drive, Karaka",
+        "41 Auranga Drive, Karaka",
+        "43 Auranga Drive, Karaka",
+      ],
+    });
+  });
+
   it("preserves an explicitly hyphenated sequence of package addresses", () => {
     expect(extractCombinedListingAddressParts("39-41-43 Auranga Drive, Drury")).toEqual({
       packageAddress: "39-41-43 Auranga Drive, Drury",

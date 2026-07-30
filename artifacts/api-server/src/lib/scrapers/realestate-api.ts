@@ -1572,6 +1572,29 @@ function splitPackageStreetAndSuffix(rawAddress: string): { streetPart: string; 
   };
 }
 
+function cleanPackageLocalitySuffix(rawSuffix: string): string {
+  return rawSuffix
+    // The package parser accepts natural-language prompts as well as bare
+    // addresses. Stop before trailing intent prose so "Karaka as a package"
+    // cannot become part of the geocoding/listing address.
+    .replace(
+      /\s+(?:as\s+(?:a\s+|one\s+)?(?:combined\s+)?package|together|as\s+one|sold\s+together|offered\s+together|please\s+analyse|please\s+analyze|for\s+(?:a\s+)?feasibility).*$/i,
+      "",
+    )
+    .trim();
+}
+
+function joinPackageStreetAndSuffix(streetPart: string, rawSuffix: string): string {
+  const suffix = cleanPackageLocalitySuffix(rawSuffix);
+  if (!suffix) return streetPart.trim();
+  // A comma-delimited locality already carries its separator. A natural
+  // address such as "39 - 43 Auranga Drive Karaka" does not, so add one
+  // instead of producing the invalid "Auranga DriveKaraka".
+  return /^[,;]/.test(suffix)
+    ? `${streetPart}${suffix}`.replace(/\s+,/g, ",").trim()
+    : `${streetPart}, ${suffix}`.trim();
+}
+
 function streetSegments(streetPart: string): string[] {
   const matches = [...streetPart.matchAll(STREET_TYPE_GLOBAL_RE)];
   const segments: string[] = [];
@@ -1591,7 +1614,7 @@ function streetSegments(streetPart: string): string[] {
 // between the numbers (e.g. "3 lot subdivision at 13 Campbell place") means
 // the second number is not a sibling street address, just incidental prose.
 const NUMBER_GAP_CONNECTOR_RE = /^(?:\s|,|&|\+|\/)+$|^\s*and\s*$/i;
-const NUMBER_RANGE_CONNECTOR_RE = /^\s*[-–—]\s*$/;
+const NUMBER_RANGE_CONNECTOR_RE = /^\s*[-\u2013\u2014]\s*$/;
 
 function expandStreetSegment(segment: string, suffix: string): string[] {
   const lastNumber = [...segment.matchAll(/\b\d+[a-z]?\b/gi)].pop();
@@ -1633,7 +1656,7 @@ function expandStreetSegment(segment: string, suffix: string): string[] {
     }
   }
 
-  return numbers.map((number) => `${number} ${streetTail}${suffix}`.replace(/\s+,/g, ",").trim());
+  return numbers.map((number) => joinPackageStreetAndSuffix(`${number} ${streetTail}`, suffix));
 }
 
 /**
@@ -1656,7 +1679,7 @@ export function extractCombinedListingAddressParts(rawAddress: string | null | u
   const unique = Array.from(
     new Map(childAddresses.map((child) => [normaliseAddressForDedupe(child), child])).values(),
   );
-  const packageAddress = `${split.streetPart}${split.suffix}`.trim();
+  const packageAddress = joinPackageStreetAndSuffix(split.streetPart, split.suffix);
   return unique.length >= 2 ? { packageAddress, childAddresses: unique } : null;
 }
 

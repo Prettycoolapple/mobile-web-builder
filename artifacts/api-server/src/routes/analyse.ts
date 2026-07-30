@@ -68,6 +68,7 @@ import { searchRealEstateListings, resolveDistrictToSuburbs, detectDirectionalAr
 import { preScreenListingsFastDetailed, type PropertyCandidate } from "../lib/pre-screen";
 import { isLinzTitleServiceAvailable } from "../lib/linz";
 import { resolveConfirmedQueuedPackage } from "../lib/queued-combined-package";
+import { isCombinedPackageAnalyseRequest } from "../lib/agent-contact-intent";
 import {
   combinedPackageFactsFromListing,
   type CombinedPackageFacts,
@@ -4063,7 +4064,19 @@ async function resolveCombinedPackage(raw: string): Promise<{
   // Explicit comma/and/& address lists retain the established offline path.
   // A bare numeric range is ambiguous (it may be one building), so it must be
   // corroborated by an active listing before launching multiple reports.
-  if (hasRangeSyntax) return null;
+  if (hasRangeSyntax) {
+    // When the user explicitly says these addresses are one package, preserve
+    // that intent even if the listing portal is temporarily unavailable. A
+    // bare ranged postal address remains conservative and still requires
+    // listing corroboration, because it may describe one building.
+    if (!isCombinedPackageAnalyseRequest(raw)) return null;
+    return {
+      packageAddress: parsed.packageAddress,
+      childAddresses: parsed.childAddresses.slice(0, 10),
+      listingUrl: activeListing?.listingUrl ?? null,
+      packageFacts: combinedPackageFactsFromListing(activeListing),
+    };
+  }
   const maxChildren = 10;
   if (parsed.childAddresses.length > maxChildren) {
     logger.warn(

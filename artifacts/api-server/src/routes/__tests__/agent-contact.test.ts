@@ -85,6 +85,19 @@ describe("isCombinedPackageAnalyseRequest", () => {
     ).toBe(true);
   });
 
+  it("understands equivalent package intent for spaced address ranges", () => {
+    expect(
+      isCombinedPackageAnalyseRequest(
+        "Please analyse all three properties at 39 - 43 Auranga Drive Karaka together",
+      ),
+    ).toBe(true);
+    expect(
+      isCombinedPackageAnalyseRequest(
+        "Assess all the sites from 39\u201343 Auranga Drive as one combined purchase",
+      ),
+    ).toBe(true);
+  });
+
   it("rejects a normal single-address analyse prompt", () => {
     expect(isCombinedPackageAnalyseRequest("Analyse 15 Fisherton Street, Grey Lynn")).toBe(false);
     expect(isCombinedPackageAnalyseRequest("分析 15 Fisherton Street, Grey Lynn")).toBe(false);
