@@ -316,6 +316,20 @@ describe("realestate-api combined listing detection", () => {
     });
   });
 
+  it.each([
+    ["39- 43 Auranga Drive Karaka", "39- 43 Auranga Drive, Karaka"],
+    ["39 -43 Auranga Drive Karaka", "39 -43 Auranga Drive, Karaka"],
+  ])("accepts asymmetric dash spacing in a package range: %s", (address, packageAddress) => {
+    expect(extractCombinedListingAddressParts(address)).toEqual({
+      packageAddress,
+      childAddresses: [
+        "39 Auranga Drive, Karaka",
+        "41 Auranga Drive, Karaka",
+        "43 Auranga Drive, Karaka",
+      ],
+    });
+  });
+
   it("removes natural-language package intent from the locality suffix", () => {
     expect(extractCombinedListingAddressParts(
       "Please analyse all three properties at 39 \u2013 43 Auranga Drive, Karaka together",
