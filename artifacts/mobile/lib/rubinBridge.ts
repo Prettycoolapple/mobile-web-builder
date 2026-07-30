@@ -29,6 +29,7 @@ export type RubinRunState =
   | "awaiting-site"
   | "detecting"
   | "subdividing"
+  | "populating"
   | "capturing"
   | "done"
   | "error";
