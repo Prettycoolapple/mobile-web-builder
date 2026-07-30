@@ -1719,7 +1719,15 @@ export function addressLineAppearsInText(target: string, haystack: string | null
  * permissive `overlap >= 2` / shared-prefix heuristics.
  */
 export function addressesLikelyMatch(target: string, candidate: string): boolean {
-  if (combinedListingAddressesLikelyMatch(target, candidate)) return true;
+  const targetPackage = extractCombinedListingAddressParts(target);
+  const candidatePackage = extractCombinedListingAddressParts(candidate);
+  if (targetPackage || candidatePackage) {
+    // A package range beginning with the same number as a child (for example
+    // "39-43 ..." versus "39 ...") must not win the child's exact-listing
+    // lookup. Only compare package syntax with package syntax.
+    if (!targetPackage || !candidatePackage) return false;
+    return combinedListingAddressesLikelyMatch(target, candidate);
+  }
   const fa = firstAddressLine(target);
   const fb = firstAddressLine(candidate);
   if (fa.length < 4 || fb.length < 4) return false;

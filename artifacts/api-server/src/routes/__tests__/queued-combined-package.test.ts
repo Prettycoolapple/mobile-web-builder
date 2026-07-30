@@ -14,6 +14,7 @@ describe("confirmed queued combined package fallback", () => {
         "43 Auranga Drive, Karaka, Franklin, Auckland",
       ],
       listingUrl: null,
+      packageFacts: null,
     });
   });
 

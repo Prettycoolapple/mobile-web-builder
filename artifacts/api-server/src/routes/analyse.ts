@@ -68,6 +68,10 @@ import { preScreenListingsFastDetailed, type PropertyCandidate } from "../lib/pr
 import { isLinzTitleServiceAvailable } from "../lib/linz";
 import { resolveConfirmedQueuedPackage } from "../lib/queued-combined-package";
 import {
+  combinedPackageFactsFromListing,
+  type CombinedPackageFacts,
+} from "../lib/combined-package-facts";
+import {
   hasStandardSubdivisionYield,
   isDevelopmentDiscoveryIntent,
   isStandardSubdivisionDiscoveryIntent,
@@ -3810,10 +3814,19 @@ type CombinedReportFailure = {
   error: string;
 };
 
+type CombinedReportPackageFacts = CombinedPackageFacts & {
+  priceScope: "combined_package";
+  landAreaScope: "combined_package";
+  childLandAreaTotalSqm: number | null;
+  childLandAreaDifferenceSqm: number | null;
+  roiAcquisitionBasis: "individual_child_cv";
+};
+
 type CombinedReportGroup = {
   kind: "combined_listing_group";
   packageAddress: string;
   childAddresses: string[];
+  packageFacts: CombinedReportPackageFacts | null;
   reports: Record<string, unknown>[];
   failures: CombinedReportFailure[];
   comparison: {
@@ -3916,6 +3929,48 @@ function selectedListingContextFromListing(listing: ListingResult, fallbackUrl: 
   };
 }
 
+function selectedPackageContextFromResolution(
+  resolution: {
+    packageAddress: string;
+    childAddresses: string[];
+    listingUrl?: string | null;
+    packageFacts: CombinedPackageFacts | null;
+  },
+): SelectedListingContext | null {
+  const listingUrl = resolution.listingUrl ?? resolution.packageFacts?.listingUrl ?? null;
+  if (!listingUrl) return null;
+  return {
+    address: resolution.packageAddress,
+    listingUrl,
+    price: resolution.packageFacts?.listingPriceNzd ?? null,
+    priceApprox: resolution.packageFacts?.listingPriceApprox ?? null,
+    landArea: resolution.packageFacts?.advertisedLandAreaSqm ?? null,
+    landAreaApprox: resolution.packageFacts?.advertisedLandAreaApprox ?? null,
+    source: "realestate.co.nz",
+    matchConfidence: "verified",
+    isActiveListing: true,
+    isCombinedListing: true,
+    packageAddress: resolution.packageAddress,
+    childAddresses: resolution.childAddresses,
+    aggregateFactsExcluded: true,
+  };
+}
+
+function combinedPackageFactsFromSelectedContext(
+  context: SelectedListingContext | null | undefined,
+): CombinedPackageFacts | null {
+  if (!context?.isCombinedListing && !context?.packageAddress) return null;
+  if (!context.listingUrl && context.price == null && context.landArea == null) return null;
+  return {
+    listingPriceNzd: context.price ?? null,
+    listingPriceApprox: context.priceApprox === true,
+    advertisedLandAreaSqm: context.landArea ?? null,
+    advertisedLandAreaApprox: context.landAreaApprox === true,
+    listingUrl: context.listingUrl ?? null,
+    source: "realestate.co.nz",
+  };
+}
+
 async function resolvePastedPropertyListing(
   text: string,
   log: FeasibilityLog,
@@ -3955,6 +4010,7 @@ async function resolveCombinedPackage(raw: string): Promise<{
   packageAddress: string;
   childAddresses: string[];
   listingUrl?: string | null;
+  packageFacts: CombinedPackageFacts | null;
 } | null> {
   const parsed = extractCombinedListingAddressParts(raw);
   if (!parsed) return null;
@@ -3990,6 +4046,7 @@ async function resolveCombinedPackage(raw: string): Promise<{
         packageAddress: canonicalParts.packageAddress,
         childAddresses: canonicalParts.childAddresses.slice(0, 10),
         listingUrl: activeListing.listingUrl,
+        packageFacts: combinedPackageFactsFromListing(activeListing),
       };
     }
   }
@@ -4009,6 +4066,7 @@ async function resolveCombinedPackage(raw: string): Promise<{
     packageAddress: parsed.packageAddress,
     childAddresses: parsed.childAddresses.slice(0, maxChildren),
     listingUrl: activeListing?.listingUrl ?? null,
+    packageFacts: combinedPackageFactsFromListing(activeListing),
   };
 }
 
@@ -4155,6 +4213,7 @@ async function generateCombinedInvestmentSummary(
   packageAddress: string,
   childSummaries: ReturnType<typeof summariseChildReportForLLM>[],
   failures: CombinedReportFailure[],
+  packageFacts: CombinedReportPackageFacts | null,
   locale: ReturnType<typeof normaliseLocale>,
 ): Promise<{
   summary: string;
@@ -4170,6 +4229,13 @@ async function generateCombinedInvestmentSummary(
   const failuresBlock = failures.length > 0
     ? `\n\nReports that failed to generate (do not invent data for these — note the gap):\n${failures.map((f) => `- ${f.address}: ${f.error}`).join("\n")}`
     : "";
+  const packageFactsBlock = packageFacts
+    ? `\n\nPACKAGE-LEVEL LISTING FACTS (these cover the whole transaction, not each child):
+- Package asking price: ${packageFacts.listingPriceNzd != null ? formatNZD(packageFacts.listingPriceNzd) : "not stated"}
+- Agent-advertised combined land: ${packageFacts.advertisedLandAreaSqm != null ? `${packageFacts.advertisedLandAreaApprox ? "approximately " : ""}${packageFacts.advertisedLandAreaSqm}m²` : "not stated"}
+- Sum of child listing areas: ${packageFacts.childLandAreaTotalSqm != null ? `${packageFacts.childLandAreaTotalSqm}m²` : "not confirmed"}
+- ROI acquisition basis: each child report uses that child's council valuation, not the full package asking price.`
+    : "";
   const localeInstruction = locale === "zh"
     ? "Write all string values in fluent simplified Chinese (zh-CN). Do not translate the property addresses — keep them in English exactly as provided."
     : "Write all string values in clear professional English suited to a New Zealand property investor.";
@@ -4181,7 +4247,7 @@ ${packageAddress}
 
 PER-PROPERTY ANALYSIS (each address was analysed independently — values below are tied to the named address, NOT aggregated across the package):
 
-${blocks}${failuresBlock}
+${blocks}${packageFactsBlock}${failuresBlock}
 
 Write a JSON object with these exact fields:
 
@@ -4202,6 +4268,7 @@ Write a JSON object with these exact fields:
 Critical rules:
 - ${localeInstruction}
 - Never aggregate land area, bedrooms, bathrooms, or CV across properties — refer to them per-address.
+- A package asking price or combined land area belongs to the whole transaction. Never repeat the full package price as the price of each child.
 - If a value is missing for a property, say so explicitly (e.g. "build year not confirmed for 7 Stanmore Road").
 - A 7% saving has already been applied to each child report's CONSTRUCTION component for coordinated package delivery. Mention the shared mobilisation/site-work efficiency and the countervailing higher upfront acquisition capital; do not apply or invent another discount.
 - For vacant sections, exit pricing represents completed new house-and-land product, not resale of bare land.
@@ -4242,13 +4309,42 @@ Critical rules:
   }
 }
 
+function reportLandAreaSqm(report: Record<string, unknown>): number | null {
+  const overview = (report.propertyOverview as Record<string, unknown> | undefined) ?? {};
+  const numeric = overview.land_area_sqm;
+  if (typeof numeric === "number" && Number.isFinite(numeric) && numeric > 0) return numeric;
+  const display = typeof overview.landArea === "string" ? overview.landArea : "";
+  const parsed = Number(display.replace(/,/g, "").match(/[\d.]+/)?.[0]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 async function buildCombinedReportGroup(args: {
   packageAddress: string;
   childAddresses: string[];
   reports: Record<string, unknown>[];
   failures: CombinedReportFailure[];
+  packageFacts: CombinedPackageFacts | null;
   locale: ReturnType<typeof normaliseLocale>;
 }): Promise<CombinedReportGroup> {
+  const childLandAreas = args.reports
+    .map(reportLandAreaSqm)
+    .filter((value): value is number => value != null);
+  const childLandAreaTotalSqm = childLandAreas.length === args.reports.length
+    ? childLandAreas.reduce((sum, area) => sum + area, 0)
+    : null;
+  const packageFacts: CombinedReportPackageFacts | null = args.packageFacts
+    ? {
+        ...args.packageFacts,
+        priceScope: "combined_package",
+        landAreaScope: "combined_package",
+        childLandAreaTotalSqm,
+        childLandAreaDifferenceSqm:
+          childLandAreaTotalSqm != null && args.packageFacts.advertisedLandAreaSqm != null
+            ? childLandAreaTotalSqm - args.packageFacts.advertisedLandAreaSqm
+            : null,
+        roiAcquisitionBasis: "individual_child_cv",
+      }
+    : null;
   const childSummaries = args.reports.map((report, idx) =>
     summariseChildReportForLLM(report, args.childAddresses[idx] ?? `Property ${idx + 1}`),
   );
@@ -4269,11 +4365,12 @@ async function buildCombinedReportGroup(args: {
     args.packageAddress,
     childSummaries,
     args.failures,
+    packageFacts,
     args.locale,
   );
 
   const deterministicComparison: CombinedReportGroup["comparison"] = {
-    summary: `This is a combined listing package. Each address has been analysed separately so land area, title, services, zoning and return assumptions stay tied to the correct property. A 7% coordinated-delivery saving is applied to construction only; the package still requires higher upfront acquisition capital.`,
+    summary: `This is a combined listing package. Each address has been analysed separately so land area, title, services, zoning and return assumptions stay tied to the correct property. The package asking price and advertised combined land area apply to the whole transaction, while each child ROI uses that child's council valuation. A 7% coordinated-delivery saving is applied to construction only.`,
     subdivisionView: reportSummaries.map((r) =>
       `${r.address}: ${r.lots != null ? `${r.lots} potential lot${r.lots === 1 ? "" : "s"} indicated by the individual report` : "subdivision yield is not confirmed in the individual report"}.`,
     ),
@@ -4308,8 +4405,22 @@ async function buildCombinedReportGroup(args: {
       }
     : deterministicComparison;
 
+  const packageScopeWarning = packageFacts?.listingPriceNzd != null || packageFacts?.advertisedLandAreaSqm != null
+    ? [
+        packageFacts.listingPriceNzd != null
+          ? `The ${formatNZD(packageFacts.listingPriceNzd)} listing price is for all ${args.childAddresses.length} titles combined, not for each title.`
+          : null,
+        packageFacts.advertisedLandAreaSqm != null
+          ? `The agent advertises ${packageFacts.advertisedLandAreaApprox ? "approximately " : ""}${packageFacts.advertisedLandAreaSqm}m² combined across the package.`
+          : null,
+        packageFacts.childLandAreaDifferenceSqm != null && packageFacts.childLandAreaDifferenceSqm !== 0
+          ? `The individual child listing areas total ${packageFacts.childLandAreaTotalSqm}m², a ${Math.abs(packageFacts.childLandAreaDifferenceSqm)}m² difference from the package description; confirm the legal title plans.`
+          : null,
+        "Each child ROI uses that child's council valuation and land area; the full package price is not repeated in every child report.",
+      ].filter((value): value is string => Boolean(value)).join(" ")
+    : "Combined listing facts are package-level context only and are not copied into any one child property.";
   const warnings = [
-    "Combined listing facts are shown as listing context only. They are not used as verified facts for any one child property.",
+    packageScopeWarning,
     "A 7% coordinated package saving is applied to construction only; land, contributions and other costs are not discounted.",
   ];
   // The LLM is already prompted to emit text in the target locale (and to
@@ -4323,6 +4434,7 @@ async function buildCombinedReportGroup(args: {
     kind: "combined_listing_group",
     packageAddress: args.packageAddress,
     childAddresses: args.childAddresses,
+    packageFacts,
     reports: args.reports,
     failures: args.failures,
     comparison: finalComparison,
@@ -4363,15 +4475,30 @@ async function applyExplicitCombinedListingContextToReport(
     childAddresses: string[];
     locale: ReturnType<typeof normaliseLocale>;
     listingUrl?: string | null;
+    packageFacts?: CombinedPackageFacts | null;
   },
 ): Promise<void> {
-  const note = "This property belongs to a combined listing package. Package land, bedroom, bathroom and price figures are excluded from this single-property report.";
+  const packageFactBits = [
+    args.packageFacts?.listingPriceNzd != null
+      ? `${formatNZD(args.packageFacts.listingPriceNzd)} is the total package asking price`
+      : null,
+    args.packageFacts?.advertisedLandAreaSqm != null
+      ? `${args.packageFacts.advertisedLandAreaApprox ? "approximately " : ""}${args.packageFacts.advertisedLandAreaSqm}m² is the advertised combined package area`
+      : null,
+  ].filter((value): value is string => Boolean(value));
+  const note = packageFactBits.length > 0
+    ? `This property belongs to a combined listing package: ${packageFactBits.join(", and ")}. The child report uses this title's own land area and council valuation for ROI.`
+    : "This property belongs to a combined listing package. Package land, bedroom, bathroom and price figures are excluded from this single-property report.";
   const localisedNote = args.locale === "zh" ? await ensureChinese(note) : note;
   const context = {
     isCombinedListingMatch: true,
     packageAddress: args.packageAddress,
     childAddresses: args.childAddresses,
     aggregateFactsExcluded: true,
+    packageListingPriceNzd: args.packageFacts?.listingPriceNzd ?? null,
+    advertisedCombinedLandAreaSqm: args.packageFacts?.advertisedLandAreaSqm ?? null,
+    advertisedCombinedLandAreaApprox: args.packageFacts?.advertisedLandAreaApprox ?? false,
+    packageListingUrl: args.listingUrl ?? args.packageFacts?.listingUrl ?? null,
     note: localisedNote,
   };
   report.combinedListingContext = context;
@@ -4379,12 +4506,20 @@ async function applyExplicitCombinedListingContextToReport(
   report.propertyOverview = {
     ...overview,
     combinedListingContext: context,
-    listingUrl: args.listingUrl ?? overview.listingUrl ?? null,
+    listingUrl: overview.listingUrl ?? args.listingUrl ?? null,
+    packageListingUrl: args.listingUrl ?? args.packageFacts?.listingUrl ?? null,
+    packageListingPrice: args.packageFacts?.listingPriceNzd != null
+      ? `${formatNZD(args.packageFacts.listingPriceNzd)} combined`
+      : null,
+    packageLandArea: args.packageFacts?.advertisedLandAreaSqm != null
+      ? `${args.packageFacts.advertisedLandAreaApprox ? "~" : ""}${args.packageFacts.advertisedLandAreaSqm}m² combined`
+      : null,
   };
-  report.selectedListingContext = {
-    ...(report.selectedListingContext as Record<string, unknown> | undefined),
+  report.packageListingContext = {
     address: args.packageAddress,
-    listingUrl: args.listingUrl ?? null,
+    listingUrl: args.listingUrl ?? args.packageFacts?.listingUrl ?? null,
+    price: args.packageFacts?.listingPriceNzd ?? null,
+    landArea: args.packageFacts?.advertisedLandAreaSqm ?? null,
     isCombinedListing: true,
     packageAddress: args.packageAddress,
     childAddresses: args.childAddresses,
@@ -4614,6 +4749,7 @@ async function runCombinedFeasibilityGroupCore(args: {
   userId: string | null;
   log: FeasibilityLog;
   selectedListingUrl?: string | null;
+  packageFacts?: CombinedPackageFacts | null;
 }): Promise<{
   reportGroup: CombinedReportGroup;
   savedSearchId: string | null;
@@ -4638,15 +4774,11 @@ async function runCombinedFeasibilityGroupCore(args: {
             locale: args.locale,
             translateTitleSchool: args.translateTitleSchool,
             conversationHistory: args.conversationHistory,
-            selectedListingUrl: args.selectedListingUrl ?? null,
-            selectedListingContext: {
-              address: args.packageAddress,
-              listingUrl: args.selectedListingUrl ?? null,
-              isCombinedListing: true,
-              packageAddress: args.packageAddress,
-              childAddresses: args.childAddresses,
-              aggregateFactsExcluded: true,
-            },
+            // Resolve the child's own active listing rather than forcing the
+            // package URL into every report. Package facts are attached after
+            // the child pipeline has acquired its subject-scoped facts.
+            selectedListingUrl: null,
+            selectedListingContext: null,
             userId: null,
             log: args.log,
             packageDevelopment: {
@@ -4666,6 +4798,7 @@ async function runCombinedFeasibilityGroupCore(args: {
         childAddresses: args.childAddresses,
         locale: args.locale,
         listingUrl: args.selectedListingUrl ?? null,
+        packageFacts: args.packageFacts ?? null,
       });
       reports.push(result.report);
     } catch (err) {
@@ -4686,6 +4819,7 @@ async function runCombinedFeasibilityGroupCore(args: {
     childAddresses: args.childAddresses,
     reports,
     failures,
+    packageFacts: args.packageFacts ?? null,
     locale: args.locale,
   });
 
@@ -4744,9 +4878,18 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
     const liveCombinedPackage =
       await resolveCombinedPackage(job.queryAddress)
       ?? await resolveCombinedPackage(job.analysisAddress);
-    const combinedPackage =
+    const confirmedCombinedPackage =
       liveCombinedPackage
       ?? resolveConfirmedQueuedPackage(job.queryAddress, job.analysisAddress);
+    const queuedPackageContext = selectedListingContextFromHistory(conv);
+    const queuedPackageFacts = combinedPackageFactsFromSelectedContext(queuedPackageContext);
+    const combinedPackage = confirmedCombinedPackage
+      ? {
+          ...confirmedCombinedPackage,
+          listingUrl: confirmedCombinedPackage.listingUrl ?? queuedPackageContext?.listingUrl ?? null,
+          packageFacts: confirmedCombinedPackage.packageFacts ?? queuedPackageFacts,
+        }
+      : null;
     if (!liveCombinedPackage && combinedPackage) {
       log.info(
         {
@@ -4768,6 +4911,7 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
           userId: job.userId,
           log,
           selectedListingUrl: combinedPackage.listingUrl ?? null,
+          packageFacts: combinedPackage.packageFacts ?? null,
         })
       : await runFeasibilityAnalyseCore({
           address: job.queryAddress,
@@ -5075,6 +5219,16 @@ router.post(
       );
       const wantAsync = Boolean(asyncFlag) && Boolean(userId);
       if (wantAsync) {
+        const packageHistoryContext = selectedPackageContextFromResolution(combinedPackage);
+        const queuedConversationHistory = packageHistoryContext
+          ? [
+              ...(conversationHistory ?? []),
+              {
+                role: "assistant" as const,
+                content: selectedListingContextToHistoryMarker(packageHistoryContext),
+              },
+            ]
+          : (conversationHistory ?? null);
         const existing = await findReusableFeasibilityJob({
           userId: userId!,
           queryAddress: address,
@@ -5098,7 +5252,7 @@ router.post(
               analysisAddress: combinedPackage.packageAddress,
               locale: analyseLocale,
               translateTitleSchool,
-              conversationHistory: conversationHistory ?? null,
+              conversationHistory: queuedConversationHistory,
             })
             .returning({ id: feasibilityJobs.id }),
         );
@@ -5125,6 +5279,7 @@ router.post(
           ?? normalisedSelectedListingContext?.listingUrl
           ?? selectedListingUrl
           ?? null,
+        packageFacts: combinedPackage.packageFacts ?? null,
       });
       res.json({
         reportGroup: result.reportGroup,
@@ -8291,6 +8446,7 @@ router.post(
               userId: chatUserId,
               log: req.log,
               selectedListingUrl: explicitCombinedPackage.listingUrl ?? null,
+              packageFacts: explicitCombinedPackage.packageFacts ?? null,
             });
             const translatedContent = await translateChatContent(
               JSON.stringify(result.reportGroup),

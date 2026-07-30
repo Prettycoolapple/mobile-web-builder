@@ -10,7 +10,7 @@ import { extractCombinedListingAddressParts } from "./scrapers/realestate-api";
 export function resolveConfirmedQueuedPackage(
   queryAddress: string,
   analysisAddress: string,
-): { packageAddress: string; childAddresses: string[]; listingUrl: null } | null {
+): { packageAddress: string; childAddresses: string[]; listingUrl: null; packageFacts: null } | null {
   if (!analysisAddress.trim() || analysisAddress.trim() === queryAddress.trim()) return null;
   const parsed = extractCombinedListingAddressParts(analysisAddress);
   if (!parsed) return null;
@@ -18,5 +18,6 @@ export function resolveConfirmedQueuedPackage(
     packageAddress: parsed.packageAddress,
     childAddresses: parsed.childAddresses.slice(0, 10),
     listingUrl: null,
+    packageFacts: null,
   };
 }

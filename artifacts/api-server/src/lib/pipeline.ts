@@ -1241,7 +1241,9 @@ export async function runPropertyPipeline(
   // Those sub-addresses are not separately listed, so speculative photo pages
   // resolve to a neighbour/parent gallery. Suppress them and only trust photos
   // from a listing whose scope matches this exact child.
-  const isCombinedListingChild = options.selectedListingContext?.isCombinedListing === true;
+  const isCombinedListingChild =
+    options.selectedListingContext?.isCombinedListing === true
+    || options.packageDevelopment != null;
 
   let realestateListing: ListingResult | null = null;
   const activeListingResult = await timed(

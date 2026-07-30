@@ -321,6 +321,14 @@ describe("realestate-api combined listing detection", () => {
       "39-43 Auranga Road, Karaka",
       "39 - 43 Auranga Drive, Karaka",
     )).toBe(true);
+    expect(addressesLikelyMatch(
+      "39 Auranga Drive, Karaka",
+      "39 - 43 Auranga Drive, Karaka",
+    )).toBe(false);
+    expect(addressesLikelyMatch(
+      "39 - 43 Auranga Drive, Karaka",
+      "39 Auranga Drive, Karaka",
+    )).toBe(false);
     expect(addressesLikelyMatch("43 Auranga Road, Karaka", "43 Auranga Drive, Karaka")).toBe(false);
   });
 
