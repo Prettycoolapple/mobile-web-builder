@@ -30,6 +30,7 @@ export type PlanningProviderId =
   | "tauranga"
   | "napier"
   | "hastings"
+  | "new-plymouth"
   | "southland"
   | "unsupported";
 
@@ -252,6 +253,11 @@ const NAPIER_CITY_BOUNDS: Bounds = { minLat: -39.58, maxLat: -39.35, minLng: 176
 // claiming Wairoa or Central Hawke's Bay inside a broad rectangular district
 // extent. Rural Hastings properties are resolved from their TA/locality text.
 const HASTINGS_DISTRICT_BOUNDS: Bounds = { minLat: -39.78, maxLat: -39.55, minLng: 176.68, maxLng: 176.98 };
+// New Plymouth District is long and irregular. This conservative urban
+// envelope covers New Plymouth City, Bell Block and Waitara without claiming
+// Stratford or South Taranaki; rural district addresses are routed by the
+// territorial-authority/locality text returned by the geocoder.
+const NEW_PLYMOUTH_URBAN_BOUNDS: Bounds = { minLat: -39.18, maxLat: -38.91, minLng: 173.94, maxLng: 174.27 };
 const SOUTHLAND_DISTRICT_BOUNDS: Bounds = { minLat: -47.35, maxLat: -44.75, minLng: 166.45, maxLng: 169.35 };
 const INVERCARGILL_CITY_BOUNDS: Bounds = { minLat: -46.55, maxLat: -46.30, minLng: 168.20, maxLng: 168.50 };
 const GORE_DISTRICT_URBAN_BOUNDS: Bounds = { minLat: -46.18, maxLat: -45.92, minLng: 168.78, maxLng: 169.18 };
@@ -914,6 +920,33 @@ const providerRegistry: PlanningProvider[] = [
       /\bmaraekakaho\b/,
       /\bbridge pa\b/,
       /\bpakipaki\b/,
+    ]),
+  ),
+  provider(
+    "new-plymouth",
+    "New Plymouth District Council planning provider",
+    "New Plymouth District Council",
+    "Taranaki",
+    "full",
+    "New Plymouth Part Operative District Plan 2025",
+    [
+      { label: "New Plymouth Part Operative District Plan zones and controls", url: "https://services2.arcgis.com/JthOmqz8HxPqljUO/arcgis/rest/services/OpenData_Strategy_DistrictPlan_PartOperative/FeatureServer" },
+      { label: "New Plymouth public rating values", url: "https://services2.arcgis.com/JthOmqz8HxPqljUO/arcgis/rest/services/OpenData_Cadastral/FeatureServer" },
+      { label: "New Plymouth public water-supply assets", url: "https://services2.arcgis.com/JthOmqz8HxPqljUO/arcgis/rest/services/OpenData_Infrastructure_WaterSupply/FeatureServer" },
+      { label: "New Plymouth public wastewater assets", url: "https://services2.arcgis.com/JthOmqz8HxPqljUO/arcgis/rest/services/OpenData_Infrastructure_Wastewater/FeatureServer" },
+      { label: "New Plymouth public stormwater assets", url: "https://services2.arcgis.com/JthOmqz8HxPqljUO/arcgis/rest/services/OpenData_Infrastructure_Stormwater/FeatureServer" },
+    ],
+    (context) => supportsAny(context, NEW_PLYMOUTH_URBAN_BOUNDS, [
+      /\bnew plymouth district\b/,
+      /\bnew plymouth\b/,
+      /\bmoturoa\b/,
+      /\bwaitara\b/,
+      /\binglewood\b/,
+      /\boakura\b/,
+      /\bbell block\b/,
+      /\bfitzroy\b/,
+      /\bwestown\b/,
+      /\bspotswood\b/,
     ]),
   ),
   provider(

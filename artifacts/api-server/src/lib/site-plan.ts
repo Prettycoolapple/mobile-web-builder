@@ -948,7 +948,7 @@ async function regionalPlanningOverlayLayers(
   };
 
   const results: PromiseSettledResult<SitePlanLayer | null>[] = [];
-  const maxConcurrent = providerId === "taupo" ? 6 : defs.length;
+  const maxConcurrent = providerId === "taupo" || providerId === "new-plymouth" ? 6 : defs.length;
   for (let offset = 0; offset < defs.length; offset += maxConcurrent) {
     results.push(...await Promise.allSettled(
       defs.slice(offset, offset + maxConcurrent).map((def, index) => queryDefinition(def, offset + index)),

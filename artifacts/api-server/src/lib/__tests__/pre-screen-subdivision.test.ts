@@ -308,7 +308,7 @@ describe("strict subdivision pre-screening", () => {
 
       expect(results).toHaveLength(1);
       expect(results[0]).toMatchObject({
-        planningProviderId: "unsupported",
+        planningProviderId: "new-plymouth",
         screeningStatus: "preliminary",
         screeningConfidenceReason: "local_rules_not_modelled",
         potentialLots: undefined,

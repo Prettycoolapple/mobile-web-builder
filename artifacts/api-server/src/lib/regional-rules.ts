@@ -123,6 +123,7 @@ const WESTERN_BAY_SUBDIVISION_SOURCE =
   "https://www.westernbay.govt.nz/property-rates-and-building/district-plan-and-resource-consents/district-plan";
 const NAPIER_DISTRICT_PLAN_SOURCE = "https://eplan.napier.govt.nz/eplan2025";
 const HASTINGS_DISTRICT_PLAN_SOURCE = "https://www.hastingsdc.govt.nz/services/district-plan/";
+const NEW_PLYMOUTH_DISTRICT_PLAN_SOURCE = "https://www.npdc.govt.nz/planning-our-future/district-plan/";
 const TAURANGA_CITY_PLAN_SOURCE =
   "https://www.tauranga.govt.nz/council/strategies-and-plans/tauranga-city-plan/how-to-use-the-city-plan";
 const KAPITI_RURAL_LIFESTYLE_SOURCE =
@@ -152,6 +153,7 @@ const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["provi
   "tauranga",
   "napier",
   "hastings",
+  "new-plymouth",
   "southland",
 ]);
 
@@ -320,6 +322,39 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
       confidence: "low",
       reason: "The operative MDRZ permits up to three dwellings per site when all applicable performance standards are met, while subdivision is assessed against the resulting compliant layout rather than a generic minimum allotment area.",
       detail: "The displayed maximum is a conservative design-led opportunity flag, not a minimum-site-area calculation or consent prediction. Confirm the 8m by 15m shape factor, access, outdoor space, outlook, infrastructure capacity, airport/viewshaft controls and natural hazards through a concurrent design and consent assessment.",
+    },
+    roiEnabled: true,
+  },
+  {
+    providerId: "new-plymouth",
+    regionalZoneCode: "NPDC_MRZ",
+    zonePattern: /\bmedium density residential zone\b/i,
+    zoneLabel: "New Plymouth Medium Density Residential Zone",
+    // The Part Operative plan uses a design-led residential pathway rather
+    // than a generic minimum vacant-allotment area. Keep the statutory minimum
+    // null and model the council's published 200sqm capacity assumption only
+    // through the explicitly caveated integrated pathway below.
+    standardMinimumLotSqm: null,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "New Plymouth Part Operative District Plan 2025 and Housing Capacity Assessment",
+    sourceUrl: NEW_PLYMOUTH_DISTRICT_PLAN_SOURCE,
+    caveats: [
+      "The Medium Density Residential Zone has no generic minimum allotment area; the 200sqm-per-dwelling figure is a council capacity-modelling assumption, not a permitted subdivision entitlement.",
+      "Subdivision and multi-unit redevelopment are design-led and must satisfy the applicable built-form, access, outdoor-space, servicing and consent controls.",
+      "Airport surfaces, coastal and flood hazards, heritage, significant natural areas and other mapped controls can reduce practical yield.",
+      "Nearby public mains and laterals do not prove network capacity, approval or a legal connection for additional dwellings.",
+    ],
+    alternativePathway: {
+      label: "New Plymouth MRZ integrated residential pathway",
+      sourceLabel: "New Plymouth Part Operative District Plan 2025 and Housing Capacity Assessment",
+      sourceUrl: NEW_PLYMOUTH_DISTRICT_PLAN_SOURCE,
+      minNetAreaSqm: 400,
+      sqmPerDwelling: 200,
+      maxYield: 3,
+      confidence: "low",
+      reason: "The council's housing-capacity work uses 200sqm per dwelling as a practical Medium Density Residential capacity assumption, while the Part Operative plan assesses the actual subdivision around a compliant design.",
+      detail: "The displayed yield is a conservative design-led opportunity flag. It is not a statutory minimum-lot calculation; confirm the dwelling layout, access, outlook, outdoor space, servicing capacity and mapped controls through land-use and subdivision design.",
     },
     roiEnabled: true,
   },

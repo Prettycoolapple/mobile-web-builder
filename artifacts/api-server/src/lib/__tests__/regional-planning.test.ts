@@ -54,6 +54,7 @@ describe("regional planning provider registry", () => {
       "rotorua",
       "napier",
       "hastings",
+      "new-plymouth",
       "southland",
       "unsupported",
     ]);
@@ -68,6 +69,7 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: -37.88476037, lng: 175.47794877, address: "91 Thornton Road, Cambridge" }).providerId).toBe("waipa");
     expect(resolvePlanningJurisdiction({ lat: -38.01, lng: 175.33, address: "Te Awamutu" }).providerId).toBe("waipa");
     expect(resolvePlanningJurisdiction({ lat: -40.356, lng: 175.611, address: "Palmerston North" }).providerId).toBe("manawatu");
+    expect(resolvePlanningJurisdiction({ lat: -39.06562567, lng: 174.03497135, address: "70 Pioneer Road, Moturoa, New Plymouth" }).providerId).toBe("new-plymouth");
     expect(resolvePlanningJurisdiction({ lat: -40.225, lng: 175.565, address: "Feilding" }).providerId).toBe("manawatu");
     expect(resolvePlanningJurisdiction({ lat: -37.14783098, lng: 175.55078515, address: "111 Rolleston Street, Thames" }).providerId).toBe("thames-coromandel");
     expect(resolvePlanningJurisdiction({ lat: -41.76295052, lng: 171.60663355, address: "175 Romilly Street, Westport" }).providerId).toBe("buller");
@@ -142,6 +144,7 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "481 Pukehina Parade, Pukehina Beach" }).providerId).toBe("western-bay");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "23 Wycliffe Street, Onekawa, Napier City" }).providerId).toBe("napier");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "226 Havelock Road, Akina, Hastings District" }).providerId).toBe("hastings");
+    expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "70 Pioneer Road, Moturoa, New Plymouth" }).providerId).toBe("new-plymouth");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "1134 Braemar Road, Rotoma" }).providerId).toBe("whakatane");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "2926A State Highway 30, Onepu, Whakatāne District" }).providerId).toBe("whakatane");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "77 Kruger Street, Balfour, Southland District" }).providerId).toBe("southland");
@@ -190,6 +193,7 @@ describe("regional planning provider registry", () => {
       "rotorua",
       "napier",
       "hastings",
+      "new-plymouth",
       "southland",
     ]));
   });

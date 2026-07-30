@@ -10,6 +10,27 @@ describe("regional infrastructure fetchers", () => {
     vi.unstubAllGlobals();
   });
 
+  it("maps New Plymouth's in-service public three-waters layers", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const mapped = ["/8/query", "/9/query", "/5/query", "/6/query", "/4/query"]
+        .some((path) => url.includes(path));
+      return new Response(JSON.stringify({
+        features: mapped ? [{
+          attributes: { OBJECTID: 1, AssetStage: "In Service", MaintenanceResp: "Water" },
+          geometry: { paths: [[[174.0349, -39.0656], [174.0351, -39.0656]]] },
+        }] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchRegionalInfrastructure("new-plymouth", -39.06562567, 174.03497135, null);
+    expect(result.map((item) => item.name).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(result.every((item) => item.location !== "unknown")).toBe(true);
+    expect(result.every((item) => item.service_source_owner === "New Plymouth District Council")).toBe(true);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("AssetStage+%3D+%27In+Service%27"))).toBe(true);
+  });
+
   it("returns conservative service classifications from regional utility layers", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

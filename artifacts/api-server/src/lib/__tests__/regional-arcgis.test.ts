@@ -24,6 +24,23 @@ describe("regional ArcGIS planning fetchers", () => {
     vi.unstubAllGlobals();
   });
 
+  it("maps New Plymouth's Part Operative Medium Density Residential Zone", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      features: [{ attributes: {
+        OBJECTID: 836,
+        Zone: "Medium Density Residential Zone",
+        Type: "Residential Zones",
+      } }],
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+
+    await expect(fetchRegionalPlanningZone(
+      jurisdiction("new-plymouth"), -39.06562567, 174.03497135,
+    )).resolves.toMatchObject({
+      zone_code: "Medium Density Residential Zone",
+      zone_description: expect.stringContaining("Medium Density Residential Zone"),
+    });
+  });
+
   it("maps the published Thames-Coromandel zone code and name", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

@@ -103,6 +103,12 @@ const NAPIER_THREE_WATERS =
   "https://services3.arcgis.com/N69BvCUwqSCkbIQF/ArcGIS/rest/services/717214_Napier_City_Council_layers/FeatureServer";
 const HASTINGS_THREE_WATERS =
   "https://gismaps.hdc.govt.nz/server/rest/services/3Waters/3WatersAssets/MapServer";
+const NEW_PLYMOUTH_WATER =
+  "https://services2.arcgis.com/JthOmqz8HxPqljUO/arcgis/rest/services/OpenData_Infrastructure_WaterSupply/FeatureServer";
+const NEW_PLYMOUTH_WASTEWATER =
+  "https://services2.arcgis.com/JthOmqz8HxPqljUO/arcgis/rest/services/OpenData_Infrastructure_Wastewater/FeatureServer";
+const NEW_PLYMOUTH_STORMWATER =
+  "https://services2.arcgis.com/JthOmqz8HxPqljUO/arcgis/rest/services/OpenData_Infrastructure_Stormwater/FeatureServer";
 const SOUTHLAND_THREE_WATERS =
   "https://gis.southlanddc.govt.nz/server/rest/services/External_ThreeWaters_Layers_v2/MapServer";
 const WAIRARAPA_WATER =
@@ -301,6 +307,21 @@ const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfras
       [20, "Public stormwater node", "IPS_Ownership = 'PUB' AND IPS_Service_Status = 'INS'"],
       [32, "Public stormwater main", "IPS_Ownership = 'PUB' AND IPS_Service_Status = 'INS'"],
       [22, "Public stormwater service line", "IPS_Ownership = 'PUB' AND IPS_Service_Status = 'INS'"],
+    ], 1000),
+  ],
+  "new-plymouth": [
+    group("Water Supply", NEW_PLYMOUTH_WATER, "New Plymouth District Council", [
+      [8, "Public potable-water main", "AssetStage = 'In Service' AND MaintenanceResp = 'Water'"],
+      [9, "Public potable-water lateral", "AssetStage = 'In Service' AND MaintenanceResp = 'Water'"],
+    ]),
+    group("Wastewater", NEW_PLYMOUTH_WASTEWATER, "New Plymouth District Council", [
+      [5, "Public wastewater lateral", "AssetStage = 'In Service' AND MaintenanceResp = 'Wastewater'"],
+      [6, "Public wastewater main", "AssetStage = 'In Service' AND MaintenanceResp = 'Wastewater'"],
+    ]),
+    group("Stormwater", NEW_PLYMOUTH_STORMWATER, "New Plymouth District Council", [
+      [4, "Public stormwater channel", "AssetStage = 'In Service' AND MaintenanceResp = 'Stormwater'"],
+      [5, "Public stormwater lateral", "AssetStage = 'In Service' AND MaintenanceResp = 'Stormwater'"],
+      [6, "Public stormwater main", "AssetStage = 'In Service' AND MaintenanceResp = 'Stormwater'"],
     ], 1000),
   ],
   whakatane: [

@@ -81,6 +81,43 @@ describe("regional site-plan wrapper", () => {
     ]);
   });
 
+  it("shows New Plymouth public three-waters and the applicable airport control", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isService = /OpenData_Infrastructure_(?:WaterSupply|Wastewater|Stormwater)\/FeatureServer\/(?:4|5|6|8|9)\/query/.test(url);
+      const isAirportControl = url.includes("/OpenData_Strategy_DistrictPlan_PartOperative/FeatureServer/7/query");
+      const features = isService
+        ? [{ attributes: { OBJECTID: 1, AssetStage: "In Service" }, geometry: { paths: [[
+            [174.0347, -39.0656], [174.0352, -39.0656],
+          ]] } }]
+        : isAirportControl
+          ? [{ attributes: { OBJECTID: 11, Name: "1" }, geometry: { rings: [[
+              [174.0345, -39.0659], [174.0354, -39.0659], [174.0354, -39.0653],
+              [174.0345, -39.0653], [174.0345, -39.0659],
+            ]] } }]
+          : [];
+      return new Response(JSON.stringify({ features }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }));
+
+    const sitePlan = await buildSitePlanForReport("70 Pioneer Road, Moturoa, New Plymouth", {
+      geocode: {
+        lat: -39.06562567,
+        lng: 174.03497135,
+        formatted: "70 Pioneer Road, Moturoa, New Plymouth",
+        suburb: "Moturoa",
+      },
+      linz_parcel: null,
+    } as RawPropertyData);
+
+    expect(sitePlan.layers.filter((layer) => layer.group === "services" && layer.available).map((layer) => layer.label).sort())
+      .toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available).map((layer) => layer.label))
+      .toContain("Airport Flight Path Surface");
+  });
+
   it("shows current MPDC three-waters assets and the applicable wind control at 19 Centennial Avenue", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

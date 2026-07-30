@@ -25,6 +25,7 @@ export type CostProfileId =
   | "tauranga-default"
   | "napier-default"
   | "hastings-default"
+  | "new-plymouth-default"
   | "southland-default"
   | "unsupported-default";
 
@@ -245,6 +246,9 @@ const REGIONAL_COST_OVERRIDES: Partial<Record<PlanningProviderId, DeepPartial<Re
   // Seeded from Auckland by request. Tune Hastings construction, development
   // contributions and council-rate assumptions here without changing Auckland.
   hastings: {},
+  // Seeded from Auckland by request. Tune New Plymouth construction,
+  // development contributions and council-rate inputs independently here.
+  "new-plymouth": {},
   // Seeded from Auckland by request. Keep Southland-specific changes isolated here.
   southland: {},
   // Seeded from Auckland by request. Tune Wairarapa build, contribution, and
@@ -284,6 +288,7 @@ const PROVIDER_PROFILE_META: Record<PlanningProviderId, { id: CostProfileId; lab
   tauranga: { id: "tauranga-default", label: "Tauranga City default cost profile (Auckland assumptions)" },
   napier: { id: "napier-default", label: "Napier City default cost profile (Auckland assumptions)" },
   hastings: { id: "hastings-default", label: "Hastings District default cost profile (Auckland assumptions)" },
+  "new-plymouth": { id: "new-plymouth-default", label: "New Plymouth District default cost profile (Auckland assumptions)" },
   southland: { id: "southland-default", label: "Southland District default cost profile (Auckland assumptions)" },
   unsupported: { id: "unsupported-default", label: "Unsupported-region default cost profile" },
 };

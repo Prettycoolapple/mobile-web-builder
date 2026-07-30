@@ -168,6 +168,8 @@ const HASTINGS_DISTRICT_PLAN =
   "https://gismaps.hdc.govt.nz/server/rest/services/DistrictPlan/OperativeDP_EPlan/MapServer";
 const HASTINGS_ZONES =
   "https://services1.arcgis.com/8L3DQUzjrkgEmDpQ/arcgis/rest/services/OpenData_OperativeDistrictPlan_Zones/FeatureServer";
+const NEW_PLYMOUTH_DISTRICT_PLAN =
+  "https://services2.arcgis.com/JthOmqz8HxPqljUO/arcgis/rest/services/OpenData_Strategy_DistrictPlan_PartOperative/FeatureServer";
 const HBRC_PROPERTY_HAZARDS =
   "https://gis.hbrc.govt.nz/server/rest/services/HazardPortal/HBRC_Property_Hazards/MapServer";
 const SOUTHLAND_ZONING =
@@ -1041,6 +1043,48 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
       overlay(HBRC_PROPERTY_HAZARDS, 59, "Contaminated Site - Environment", "polygon", "restricted"),
     ],
     queryTimeoutMs: 12_000,
+  },
+  "new-plymouth": {
+    zoneLayers: [
+      {
+        serviceUrl: NEW_PLYMOUTH_DISTRICT_PLAN,
+        layerId: 51,
+        label: "New Plymouth Part Operative District Plan Zone",
+        codeField: "Zone",
+        nameFields: ["Zone", "Type"],
+        decodeCodedValues: false,
+      },
+    ],
+    overlayLayers: [
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 1, "Site of Significance to Māori", "point", "restricted", 30),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 2, "Archaeological Site", "point", "restricted", 30),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 4, "Heritage Building or Item", "point", "restricted", 30),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 5, "Notable Tree", "point", "moderate", 30),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 7, "Airport Flight Path Surface", "polygon", "control", undefined, ["Name", "Section"]),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 16, "Heritage Character Area", "polygon", "restricted"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 20, "Coastal Environment", "polygon", "control"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 22, "Rail Corridor Vibration Alert Area", "polygon", "moderate"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 23, "Rail Corridor Noise Alert Area", "polygon", "moderate"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 24, "Designation", "polygon", "control"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 25, "Precinct", "polygon", "control"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 27, "Coastal Frontage Site", "polygon", "control"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 28, "Specific Control Area", "polygon", "control"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 29, "Risk Management Contour", "polygon", "restricted"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 31, "National Grid Subdivision Corridor", "polygon", "restricted"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 33, "Gas Transmission Pipeline", "polyline", "restricted", 35),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 36, "Stormwater Flooding Area", "polygon", "restricted"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 37, "Coastal Flooding Hazard Area", "polygon", "restricted"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 38, "Coastal Erosion Hazard Area", "polygon", "restricted"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 39, "Fault Hazard Area", "polygon", "restricted"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 40, "Flood Detention Area or Spillway", "polygon", "restricted"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 41, "Volcanic Hazard Area", "polygon", "restricted"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 42, "Flood Plain", "polygon", "restricted"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 45, "Outstanding Natural Feature and Landscape", "polygon", "restricted"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 46, "Outstanding Natural Character", "polygon", "restricted"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 48, "Significant Natural Area", "polygon", "restricted"),
+      overlay(NEW_PLYMOUTH_DISTRICT_PLAN, 49, "Waterbody Catchment Control", "polygon", "control"),
+    ],
+    maxConcurrentOverlayQueries: 6,
   },
   whakatane: {
     // This council host commonly needs more than the default nine seconds

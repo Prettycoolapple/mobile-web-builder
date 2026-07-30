@@ -1285,4 +1285,24 @@ describe("regional planning rule status", () => {
       lotResult: { lots: 2, sqm_per_lot: 23_565, min_lot_size: 20_000 },
     });
   });
+
+  it("enables New Plymouth MRZ ROI without inventing a statutory minimum lot size", () => {
+    const provider = { providerId: "new-plymouth" as const, providerName: "New Plymouth District Council planning provider" };
+    const zone = {
+      zone_code: "Medium Density Residential Zone",
+      zone_description: "Medium Density Residential Zone",
+      min_lot_size_sqm: null,
+      raw_zone: JSON.stringify({ Type: "Residential Zones" }),
+    };
+
+    expect(regionalPlanningRuleStatus(provider, zone, 506, [])).toMatchObject({
+      subdivisionRules: "not_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: false,
+      automaticRoiAllowed: true,
+      regionalZoneCode: "NPDC_MRZ",
+      verifiedMinimumLotSqm: null,
+      sourceLabel: expect.stringContaining("Housing Capacity Assessment"),
+    });
+  });
 });

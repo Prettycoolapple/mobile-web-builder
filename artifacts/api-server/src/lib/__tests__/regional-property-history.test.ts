@@ -503,6 +503,36 @@ describe("regional property history", () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/Property/Property_Data/MapServer/0/query");
   });
 
+  it("uses New Plymouth's exact rating unit for 70 Pioneer Road", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      features: [
+        { attributes: { full_address: "68 Pioneer Road, NEW PLYMOUTH", property_area: 0.0500, capital_value: 410_000 } },
+        { attributes: {
+          full_address: "70 Pioneer Road, NEW PLYMOUTH",
+          property_area: 0.0506,
+          capital_value: 425_000,
+          land_value: 270_000,
+          rate_year: 2026,
+          legaldesc: "Lot 66 DP 1957",
+        } },
+      ],
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+
+    await expect(fetchRegionalPropertyHistory(
+      "new-plymouth",
+      "70 Pioneer Road, Moturoa, New Plymouth",
+      -39.06562567,
+      174.03497135,
+    )).resolves.toMatchObject({
+      cv_nzd: 425_000,
+      cv_year: 2026,
+      land_area_sqm: 506,
+      land_area_source: "new_plymouth_council_rating_gis",
+      land_area_scope: "rating_unit",
+      property_type: "Residential",
+    });
+  });
+
   it("uses Tauranga's exact assessment and 2023 valuation records", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

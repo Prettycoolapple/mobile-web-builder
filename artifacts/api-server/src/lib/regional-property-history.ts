@@ -16,6 +16,8 @@ const PNCC_PROPERTY_VALUATION =
 const NAPIER_PROPERTY_WFS = "https://data.napier.govt.nz/geo/ows";
 const HASTINGS_PROPERTY =
   "https://gismaps.hdc.govt.nz/server/rest/services/Property/Property_Data/MapServer/0";
+const NEW_PLYMOUTH_RATES =
+  "https://services2.arcgis.com/JthOmqz8HxPqljUO/arcgis/rest/services/OpenData_Cadastral/FeatureServer/0";
 const TAURANGA_ASSESSMENT =
   "https://gis.tauranga.govt.nz/server/rest/services/Assessment/FeatureServer/2";
 const TAURANGA_CAPITAL_VALUE =
@@ -885,6 +887,74 @@ async function fetchBullerPropertyHistory(
   }
 }
 
+async function fetchNewPlymouthPropertyHistory(
+  address: string,
+  lat: number,
+  lng: number,
+  linzAreaSqm?: number | null,
+): Promise<PropertyHistory> {
+  try {
+    const url = new URL(`${NEW_PLYMOUTH_RATES}/query`);
+    url.searchParams.set("f", "json");
+    url.searchParams.set("where", "1=1");
+    url.searchParams.set("geometry", `${lng},${lat}`);
+    url.searchParams.set("geometryType", "esriGeometryPoint");
+    url.searchParams.set("inSR", "4326");
+    url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
+    url.searchParams.set(
+      "outFields",
+      "full_address,property_area,capital_value,land_value,rate_year,legaldesc,AS_ASSESS_NO,AS_PROP_ID",
+    );
+    url.searchParams.set("returnGeometry", "false");
+
+    const response = await fetch(url.toString(), { signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`New Plymouth property GIS HTTP ${response.status}`);
+    const data = await response.json() as { features?: ArcGisFeature[]; error?: { message?: string } };
+    if (data.error) throw new Error(`New Plymouth property GIS error: ${data.error.message ?? "unknown"}`);
+
+    const requestedNumber = leadingStreetNumber(address);
+    const feature = (data.features ?? []).find((candidate) => {
+      const councilAddress = String(candidate.attributes?.["full_address"] ?? "");
+      return requestedNumber != null && leadingStreetNumber(councilAddress) === requestedNumber;
+    });
+    const attrs = feature?.attributes;
+    if (!attrs) return emptyPropertyHistory(linzAreaSqm);
+
+    const cvNzd = positiveNumber(attrs["capital_value"]);
+    const landValue = nonNegativeNumber(attrs["land_value"]);
+    const hectares = Number(attrs["property_area"]);
+    const councilAreaSqm = Number.isFinite(hectares) && hectares > 0
+      ? Math.round(hectares * 10_000)
+      : null;
+    const landAreaSqm = linzAreaSqm ?? councilAreaSqm;
+    const cvYear = positiveNumber(attrs["rate_year"]);
+    const propertyType = cvNzd != null && landValue != null && cvNzd > landValue
+      ? "Residential"
+      : null;
+
+    return {
+      cv_nzd: cvNzd,
+      cv_year: cvNzd ? cvYear : null,
+      build_year: null,
+      floor_area_sqm: null,
+      land_area_sqm: landAreaSqm,
+      land_area_source: linzAreaSqm ? "linz" : "new_plymouth_council_rating_gis",
+      land_area_scope: linzAreaSqm ? "parcel" : "rating_unit",
+      property_type: propertyType,
+      sources_confirmed: [
+        ...(cvNzd ? ["cv_nzd (New Plymouth District Council rating GIS)"] : []),
+        ...(landAreaSqm ? [linzAreaSqm
+          ? "land_area_sqm (from LINZ parcel)"
+          : "land_area_sqm (New Plymouth District Council rating GIS)"] : []),
+        ...(propertyType ? ["property_type (New Plymouth District Council improvement value)"] : []),
+      ],
+      sources_estimated: ["build_year", "floor_area_sqm", ...(propertyType ? [] : ["property_type"])],
+    };
+  } catch {
+    return emptyPropertyHistory(linzAreaSqm);
+  }
+}
+
 export async function fetchRegionalPropertyHistory(
   providerId: PlanningProviderId,
   address: string,
@@ -903,6 +973,7 @@ export async function fetchRegionalPropertyHistory(
   if (providerId === "kapiti") return fetchKapitiPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId === "napier") return fetchNapierPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId === "hastings") return fetchHastingsPropertyHistory(address, lat, lng, linzAreaSqm);
+  if (providerId === "new-plymouth") return fetchNewPlymouthPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId !== "whakatane") return emptyPropertyHistory(linzAreaSqm);
 
   const url = new URL(`${WHAKATANE_PROPERTY}/query`);
