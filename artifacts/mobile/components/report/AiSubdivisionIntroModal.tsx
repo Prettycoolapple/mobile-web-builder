@@ -16,10 +16,8 @@ import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useT } from "@/lib/i18n";
 
-// "launch" is the pre-release "Launching 31 July 2026" notice. Rubin is live, so
-// it is HIDDEN rather than removed — the slide, its icon and its copy all stay
-// put so it can be restored by adding it back to `steps` below. The funnel now
-// ends on the last real slide and opens Rubin from there.
+// "launch" is the temporary pre-release notice. Keep this slide wired until the
+// direct Rubin launch flag in SitePlanCard is enabled.
 type StepId = "planning" | "consultant" | "upgrade" | "launch";
 
 interface Props {
@@ -94,13 +92,11 @@ export function AiSubdivisionIntroModal({
   const { height: winHeight } = useWindowDimensions();
   const [stepIndex, setStepIndex] = useState(0);
   const [showPaymentConfirmation, setShowPaymentConfirmation] = useState(false);
-  // "launch" is deliberately absent — see the StepId note. Re-adding it here is
-  // all that is needed to bring the pre-release notice back.
   const steps = useMemo<StepId[]>(
     () =>
       showUpgradeSlide
-        ? ["planning", "consultant", "upgrade"]
-        : ["planning", "consultant"],
+        ? ["planning", "consultant", "upgrade", "launch"]
+        : ["planning", "consultant", "launch"],
     [showUpgradeSlide],
   );
 
@@ -119,14 +115,11 @@ export function AiSubdivisionIntroModal({
   const demoMediaMaxHeight = Math.max(150, Math.min(300, winHeight * 0.3));
   const title = t(`site_plan.ai_modal.${step}.title`);
   const body = t(`site_plan.ai_modal.${step}.body`);
-  // Same precedence as handlePrimary: upgrade wins over isFinal, or the payment
-  // slide would be labelled with the action that comes after it.
-  const primaryLabel =
-    step === "upgrade"
+  const primaryLabel = isFinal
+    ? t("site_plan.ai_modal.ok")
+    : step === "upgrade"
       ? t("site_plan.ai_modal.pay_now")
-      : isFinal
-        ? t("site_plan.ai_modal.run_now")
-        : t("site_plan.ai_modal.next");
+      : t("site_plan.ai_modal.next");
 
   const standardFeatures = [
     t("site_plan.ai_modal.upgrade.f1"),
@@ -134,15 +127,12 @@ export function AiSubdivisionIntroModal({
   ];
 
   const handlePrimary = () => {
-    // The upgrade slide is checked BEFORE `isFinal`. With the launch slide
-    // hidden, upgrade is the last step for free users, and testing `isFinal`
-    // first would skip the payment confirmation entirely.
-    if (step === "upgrade") {
-      setShowPaymentConfirmation(true);
-      return;
-    }
     if (isFinal) {
       onComplete();
+      return;
+    }
+    if (step === "upgrade") {
+      setShowPaymentConfirmation(true);
       return;
     }
     setStepIndex((current) => Math.min(current + 1, steps.length - 1));
@@ -150,12 +140,6 @@ export function AiSubdivisionIntroModal({
 
   const confirmPaymentInterest = () => {
     setShowPaymentConfirmation(false);
-    // Upgrade is the final slide once "launch" is hidden, so confirming payment
-    // finishes the funnel rather than advancing to a step that does not exist.
-    if (isFinal) {
-      onComplete();
-      return;
-    }
     setStepIndex((current) => Math.min(current + 1, steps.length - 1));
   };
 

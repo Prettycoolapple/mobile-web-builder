@@ -2565,7 +2565,7 @@ export default function SearchScreen() {
           if (intentData.intent === "positive" && intentData.available === false) {
             updateLastMessage({
               type: "text",
-              content: "I couldn't find an active subject-property listing agent with an SMS-capable mobile number for this request.",
+              content: "LIM and Title reports can currently be requested only for properties with an active listing.",
             }, sessionId);
             setIsLoading(false);
             void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

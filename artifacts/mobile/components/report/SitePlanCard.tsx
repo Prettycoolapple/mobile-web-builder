@@ -34,6 +34,7 @@ import { useColors } from "@/hooks/useColors";
 import { useT } from "@/lib/i18n";
 import { translateForOS } from "@/lib/i18n";
 import { getApiBase } from "@/lib/api";
+import { AiSubdivisionIntroModal } from "@/components/report/AiSubdivisionIntroModal";
 import {
   pointsString,
   projectCoordinate,
@@ -49,6 +50,9 @@ import { useSubdivision } from "@/components/report/useSubdivision";
 const ALWAYS_ON_LAYERS = new Set(["boundary", "nearby-boundaries"]);
 const SITE_PLAN_STALE_TIME_MS = 15 * 60 * 1000;
 const SITE_PLAN_GC_TIME_MS = 60 * 60 * 1000;
+// Temporary pre-launch gate. Flip this to `true` when Rubin is ready to make
+// both "Generate layout" and "Visualize Subdivision options" launch it directly.
+const RUBIN_DIRECT_LAUNCH_ENABLED = false;
 
 type GeoJsonGeometry =
   | { type: "Point"; coordinates: Coordinate }
@@ -447,6 +451,7 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
   const { width: viewportWidth } = useWindowDimensions();
   const searchId = report.historyId ?? null;
   const planHeight = Math.min(430, Math.max(310, viewportWidth - 42));
+  const [showAiModal, setShowAiModal] = useState(false);
   const didAutoOpenAiSubdivisionRef = useRef(false);
   const lastLaunchAiSubdivisionNonceRef = useRef(0);
   const aiBreath = useSharedValue(0);
@@ -760,12 +765,24 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
       })
       .catch(() => null);
 
-    // Straight into Rubin. The intro slides are deliberately not shown for now
-    // (see the note where the modal used to be rendered) — the real thing loads
-    // in about the time the first slide took to read. The funnel event is still
-    // recorded and completed, so the analytics stay comparable across the change.
+    // Keep the production Rubin path intact behind one release switch. While the
+    // switch is off, this event remains open until the user reaches the final
+    // launch-notice slide and taps OK.
+    if (RUBIN_DIRECT_LAUNCH_ENABLED) {
+      aiInterestEventRef.current = null;
+      openRubin();
+      completeInterestEvent(eventPromise);
+      return;
+    }
+
+    aiInterestEventRef.current = eventPromise;
+    setShowAiModal(true);
+  };
+
+  const completeAiSubdivisionInterest = () => {
+    const eventPromise = aiInterestEventRef.current;
+    setShowAiModal(false);
     aiInterestEventRef.current = null;
-    openRubin();
     completeInterestEvent(eventPromise);
   };
 
@@ -815,6 +832,18 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
     lastLaunchAiSubdivisionNonceRef.current = launchAiSubdivisionNonce;
     recordAiSubdivisionInterest();
   }, [autoOpenAiSubdivision, launchAiSubdivisionNonce, subdivision.available]);
+
+  const activeSpecialStatus =
+    user?.specialStatus === "friends_family" ||
+    (user?.specialStatus === "supercharge" &&
+      (!user.specialStatusExpiresAt ||
+        new Date(user.specialStatusExpiresAt).getTime() > Date.now()));
+  const showUpgradeSlide =
+    !user ||
+    (user.role === "general" &&
+      user.subscriptionTier !== "standard" &&
+      user.subscriptionTier !== "pro" &&
+      !activeSpecialStatus);
 
   const visibleVectorLayers = useMemo(
     () =>
@@ -1154,11 +1183,12 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
           ))}
         </View>
       ) : null}
-      {/* The AI-subdivision intro slides are switched off for now — the button
-          opens Rubin directly. `AiSubdivisionIntroModal` and its i18n strings
-          are untouched; bringing them back means rendering it here again and
-          having `recordAiSubdivisionInterest` set state instead of calling
-          `openRubin()`. */}
+      <AiSubdivisionIntroModal
+        visible={showAiModal}
+        showUpgradeSlide={showUpgradeSlide}
+        onCancel={() => setShowAiModal(false)}
+        onComplete={completeAiSubdivisionInterest}
+      />
     </View>
   );
 }
