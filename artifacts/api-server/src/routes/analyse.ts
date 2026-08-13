@@ -21,6 +21,7 @@ import {
   sanitizeAssistantProse,
   resolveDelegatedDiscoverSuburb,
   detectFilterSpecFromText,
+  shouldForceOpenReportFollowUp,
   Message,
   type ChatIntent,
   classifyCombinedListingPackage,
@@ -1596,13 +1597,24 @@ function findLastSubstantiveSearchPresentation(
   return null;
 }
 
-// True when this thread recently ran an AREA/DISCOVERY search (a discovery-intent
-// user turn with no specific address, or our tenure-exclusion offer). Used to gate
-// re-routing an intent correction ("I mean that is subdividable") back into the
-// discover flow without hijacking a single-property report thread (where "is THIS
-// subdividable?" should stay an analysis answer).
-function threadHasRecentAreaDiscovery(messages: Message[] | undefined): boolean {
-  for (const msg of [...(messages ?? [])].slice(-8)) {
+/**
+ * True when this thread was ALREADY running an AREA/DISCOVERY search before the
+ * current turn (a discovery-intent user turn with no specific address, or our
+ * tenure-exclusion offer). Used to gate re-routing an intent correction ("I mean
+ * that is subdividable") back into the discover flow without hijacking a
+ * single-property report thread (where "is THIS subdividable?" should stay an
+ * analysis answer).
+ *
+ * The message being routed is deliberately excluded. It is the one whose mode we
+ * are deciding, and it matches the same discovery predicates, so counting it as
+ * evidence made that gate self-satisfying — a lone report question could vouch
+ * for itself and be re-routed into a property search.
+ */
+export function threadHasRecentAreaDiscovery(messages: Message[] | undefined): boolean {
+  const all = [...(messages ?? [])];
+  const currentTurnIdx = all.map((m) => m.role).lastIndexOf("user");
+  const priorMessages = currentTurnIdx >= 0 ? all.slice(0, currentTurnIdx) : all;
+  for (const msg of priorMessages.slice(-8)) {
     const text = msg.content ?? "";
     if (!text) continue;
     if (msg.role === "assistant" && parseOfferedTenuresFromAssistant(text).length > 0) return true;
@@ -6810,13 +6822,18 @@ router.post(
       }
       // Intent correction toward subdivision/development ("I mean that is
       // subdividable") inside a discovery thread: re-run discovery rather than
-      // answering as prose about an open single-property report. Guarded by
-      // threadHasRecentAreaDiscovery so "is this subdividable?" on a report thread
-      // is never hijacked.
+      // answering as prose about an open single-property report.
+      //
+      // Both guards matter. The discovery predicates match a bare "development"
+      // or "subdivision", which is also how users word questions ABOUT an open
+      // report ("what are the main development risks here?"), so an open report
+      // wins unless the user explicitly asked to find other properties —
+      // otherwise this quietly undoes the intent classifier's own report guard.
       if (
         effectiveMode !== "discover"
         && !hasNumberedStreetAddress(userText)
         && (isStandardSubdivisionDiscoveryIntent(userText) || isDevelopmentDiscoveryIntent(userText))
+        && !shouldForceOpenReportFollowUp(userText, reportCtx)
         && threadHasRecentAreaDiscovery(messages)
       ) {
         req.log.info({ sample: userText.slice(0, 100) }, "Chat routing: subdivision intent correction — using discover flow");

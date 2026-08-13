@@ -16,7 +16,9 @@ import {
   isListingBrowseContinuation,
   normaliseAdditionalSuburbs,
   normaliseIncludeTenures,
+  shouldForceOpenReportFollowUp,
 } from "../claude";
+import { isDevelopmentDiscoveryIntent } from "../discovery-intent";
 
 const mockedGenerateContent = vi.mocked(ai.models.generateContent);
 
@@ -505,6 +507,38 @@ describe("chat intent extraction", () => {
       .toEqual(["cross_lease", "leasehold", "unit_title"]);
     expect(normaliseIncludeTenures(undefined)).toEqual([]);
     expect(normaliseIncludeTenures(["", null, 7, "freehold"])).toEqual([]);
+  });
+
+  describe("open-report guard vs. the chat route's discover overrides", () => {
+    const REPORT = { address: "36 Old Mill Road, Grey Lynn, Auckland City", suburb: "grey lynn" };
+
+    // The discovery predicates match a bare "development"/"subdivision", which
+    // is also how users word questions about the report in front of them. The
+    // route re-checks discovery intent AFTER extractChatIntent has classified
+    // the turn, so the open-report guard has to veto each of these or the
+    // question is answered with listing cards for the report's own suburb.
+    it.each([
+      "What are the main development risks here?",
+      "What are the development costs?",
+      "Explain the development potential",
+      "What's the ROI on this development?",
+      "How long will the development take?",
+      "Is this subdividable?",
+      "What are the subdivision costs here?",
+    ])("vetoes the discover override for: %s", (message) => {
+      expect(isDevelopmentDiscoveryIntent(message) || /subdivi/i.test(message)).toBe(true);
+      expect(shouldForceOpenReportFollowUp(message, REPORT)).toBe(true);
+    });
+
+    it("still lets an explicit property search through while a report is open", () => {
+      expect(shouldForceOpenReportFollowUp("Show me subdividable properties in Papakura", REPORT)).toBe(false);
+      expect(shouldForceOpenReportFollowUp("find me development sites in Orakei", REPORT)).toBe(false);
+      expect(shouldForceOpenReportFollowUp("any other properties nearby?", REPORT)).toBe(false);
+    });
+
+    it("does not apply when no report is open", () => {
+      expect(shouldForceOpenReportFollowUp("What are the main development risks here?", null)).toBe(false);
+    });
   });
 
   it("isListingBrowseContinuation: continuations yes, fresh browses no", () => {

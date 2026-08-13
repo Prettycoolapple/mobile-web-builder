@@ -954,7 +954,14 @@ function isExplicitPropertyDiscoveryRequest(message: string): boolean {
   );
 }
 
-function shouldForceOpenReportFollowUp(
+/**
+ * True when an open report — not the wider market — is the subject of the
+ * message. Exported because the chat route applies several deterministic
+ * discover overrides AFTER this module has classified the intent; each of them
+ * has to defer to an open report or it silently re-routes a report question
+ * into a property search.
+ */
+export function shouldForceOpenReportFollowUp(
   message: string,
   reportContext?: { address?: string | null; suburb?: string | null } | null,
 ): boolean {

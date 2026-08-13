@@ -20,6 +20,18 @@ describe("detectPropertyDataLookup", () => {
     expect(detectPropertyDataLookup("should I subdivide this?")).toBeNull();
     expect(detectPropertyDataLookup("what are the next steps")).toBeNull();
   });
+
+  it("leaves questions that only reference the zone to the model", () => {
+    // These name the zone but ask about something else. Answering them with the
+    // cached zone code silently drops the actual question.
+    expect(detectPropertyDataLookup("What building typology suits this zone?")).toBeNull();
+    expect(detectPropertyDataLookup("What can I build in this zone?")).toBeNull();
+    expect(detectPropertyDataLookup("How many dwellings does this zone allow?")).toBeNull();
+    expect(detectPropertyDataLookup("What height is permitted in this zone?")).toBeNull();
+    // The plain datum lookups still short-circuit to the cache.
+    expect(detectPropertyDataLookup("what zone is this property")).toBe("zone");
+    expect(detectPropertyDataLookup("what's the zoning here?")).toBe("zone");
+  });
 });
 
 describe("buildPropertyDataLookupAnswer", () => {

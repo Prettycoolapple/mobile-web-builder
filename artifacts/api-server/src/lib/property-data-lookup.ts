@@ -19,9 +19,19 @@ const VALUE_ZH = /估值|市值|市场价值?|资本价值|政府估价|值多�
 const VALUE_UNAVAILABLE_ZH =
   "\u8fd9\u4efd\u62a5\u544a\u91cc\u6ca1\u6709\u8db3\u591f\u786e\u8ba4\u7684\u4ef7\u503c\u6570\u636e\uff0c\u6240\u4ee5\u6211\u4e0d\u4f1a\u7ed9\u51fa\u4e00\u4e2a\u770b\u4f3c\u7cbe\u786e\u7684\u5e02\u573a\u4ef7\u3002\u66f4\u53ef\u9760\u7684\u505a\u6cd5\u662f\u7ed3\u5408\u8fd1\u671f\u540c\u7c7b\u6210\u4ea4\u3001\u623f\u5c4b\u72b6\u51b5\u548c\u5f53\u524d\u6302\u724c\u53cd\u9988\u6765\u4f30\u7b97\u3002";
 
+/**
+ * Questions that merely REFERENCE the zone while asking about something else:
+ * what suits it, what may be built, how tall, how dense, how many dwellings.
+ * `ZONE_EN` matches any "what … zone" sentence, so without this carve-out
+ * "what building typology suits this zone?" is answered with a one-line zone
+ * datum and the real question is never put to the model.
+ */
+const ZONE_REFERENCED_NOT_ASKED =
+  /\b(typolog\w*|building\s+type|what\s+(?:can|could|should)\s+(?:i|we|you)\s+(?:build|develop)|suits?|suitable|allowed|permitted|height|storey|storeys|stories|density|yield|dwellings?|units?|setbacks?)\b/i;
+
 /** Classify a followup as a specific cached-data lookup, else null. */
 export function detectPropertyDataLookup(text: string): PropertyDataField | null {
-  if (ZONE_EN.test(text) || ZONE_ZH.test(text)) return "zone";
+  if ((ZONE_EN.test(text) || ZONE_ZH.test(text)) && !ZONE_REFERENCED_NOT_ASKED.test(text)) return "zone";
   if (LAND_EN.test(text) || LAND_ZH.test(text)) return "land_area";
   if (VALUE_EN.test(text) || VALUE_ZH.test(text)) return "value";
   return null;
