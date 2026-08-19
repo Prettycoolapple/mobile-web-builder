@@ -50,9 +50,10 @@ import { useSubdivision } from "@/components/report/useSubdivision";
 const ALWAYS_ON_LAYERS = new Set(["boundary", "nearby-boundaries"]);
 const SITE_PLAN_STALE_TIME_MS = 15 * 60 * 1000;
 const SITE_PLAN_GC_TIME_MS = 60 * 60 * 1000;
-// Temporary pre-launch gate. Flip this to `true` when Rubin is ready to make
-// both "Generate layout" and "Visualize Subdivision options" launch it directly.
-const RUBIN_DIRECT_LAUNCH_ENABLED = false;
+// Release switch for the Rubin hand-off. On: "Generate layout" and "Visualize
+// Subdivision options" open Rubin directly. Off: the intro slides run instead,
+// ending on the launch notice. Typed `boolean` so both arms stay live code.
+const RUBIN_DIRECT_LAUNCH_ENABLED: boolean = true;
 
 type GeoJsonGeometry =
   | { type: "Point"; coordinates: Coordinate }
