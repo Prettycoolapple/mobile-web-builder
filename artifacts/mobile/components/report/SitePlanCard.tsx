@@ -450,7 +450,10 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
   const router = useRouter();
   const { getApiHeaders, user } = useAuth();
   const { width: viewportWidth } = useWindowDimensions();
-  const searchId = report.historyId ?? null;
+  // The id of whichever record owns this report on the server: a `searches` row
+  // for signed-in users, the feasibility job for guests (who have no history).
+  // Both are accepted by GET /analyse/:id/site-plan and authorised the same way.
+  const searchId = report.historyId ?? report.guestJobId ?? null;
   const planHeight = Math.min(430, Math.max(310, viewportWidth - 42));
   const [showAiModal, setShowAiModal] = useState(false);
   const didAutoOpenAiSubdivisionRef = useRef(false);

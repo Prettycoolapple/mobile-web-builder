@@ -460,6 +460,13 @@ export interface FeasibilityReport {
   openAiSubdivisionRequestKey?: string;
   /** Server search-history row id when this report was persisted. */
   historyId?: string | null;
+  /**
+   * Background-job id for a guest's report. Guests write no history row, so this
+   * is the only owned record behind their report, and the site plan is fetched
+   * against it. Deliberately separate from `historyId`: features that genuinely
+   * need a history row (photo refresh, history navigation) must stay off.
+   */
+  guestJobId?: string | null;
   /** Server-created timestamp for history ordering when available. */
   historyCreatedAt?: string | null;
   scores: Score;

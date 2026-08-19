@@ -5633,6 +5633,22 @@ router.get("/analyse/jobs/:jobId", async (req, res) => {
       const postAnalysisAnswers = !isGroup && report
         ? await buildPostAnalysisAnswersForReport(job.queryAddress, report, job.locale === "zh" ? "zh" : "en", req.log)
         : [];
+      // A guest report has no history row, so `historyId` stays null and every
+      // feature keyed on it (photo refresh, history) correctly stays off. The
+      // site plan is keyed on this instead — the job is the owned record the
+      // guest can actually prove. Stamped on the group and each child so a
+      // combined package behaves like the single-report case.
+      if (!job.userId && report) {
+        report.guestJobId = job.id;
+        const children = report.reports;
+        if (Array.isArray(children)) {
+          for (const child of children) {
+            if (child && typeof child === "object") {
+              (child as Record<string, unknown>).guestJobId = job.id;
+            }
+          }
+        }
+      }
       res.json({
         status: job.status,
         searchId: job.searchId,
@@ -5734,28 +5750,63 @@ router.get("/analyse/:searchId/site-plan", async (req, res) => {
     res.status(400).json({ error: "searchId is required", code: "MISSING_SEARCH_ID" });
     return;
   }
-  if (!uid) {
+  // Guests have no `searches` row to hang a site plan off, so for them the id in
+  // the path is their feasibility job and the install hash is the credential.
+  // Same shape either way: an owned record carrying the report and its address.
+  const guestHash = uid ? null : getAnonymousInstallHash(req.headers as Record<string, unknown>);
+  if (!uid && !guestHash) {
     res.status(401).json({ error: "Unauthorized", code: "UNAUTHORIZED" });
     return;
   }
 
   try {
-    const rows = await withDbRetry(() =>
-      db
-        .select({ userId: searches.userId, resultJson: searches.resultJson, address: searches.address })
-        .from(searches)
-        .where(eq(searches.id, searchId))
-        .limit(1),
-    );
-    const row = rows[0];
-    if (!row || row.userId !== uid) {
+    let ownedReport: Record<string, unknown> | null = null;
+    let ownedAddress: string | null = null;
+
+    if (uid) {
+      const rows = await withDbRetry(() =>
+        db
+          .select({ userId: searches.userId, resultJson: searches.resultJson, address: searches.address })
+          .from(searches)
+          .where(eq(searches.id, searchId))
+          .limit(1),
+      );
+      const row = rows[0];
+      if (row && row.userId === uid) {
+        ownedReport = (row.resultJson ?? {}) as Record<string, unknown>;
+        ownedAddress = typeof row.address === "string" ? row.address : null;
+      }
+    } else {
+      const rows = await withDbRetry(() =>
+        db
+          // Narrowed on purpose: this runs on every Plan-tab open, and the row
+          // also carries the queued conversation history, which is dead weight here.
+          .select({
+            userId: feasibilityJobs.userId,
+            guestHash: feasibilityJobs.guestHash,
+            resultJson: feasibilityJobs.resultJson,
+            analysisAddress: feasibilityJobs.analysisAddress,
+            queryAddress: feasibilityJobs.queryAddress,
+          })
+          .from(feasibilityJobs)
+          .where(eq(feasibilityJobs.id, searchId))
+          .limit(1),
+      );
+      const job = rows[0];
+      if (job && canReadFeasibilityJob(job, { userId: uid, guestHash })) {
+        ownedReport = (job.resultJson ?? {}) as Record<string, unknown>;
+        ownedAddress = job.analysisAddress ?? job.queryAddress ?? null;
+      }
+    }
+
+    if (!ownedReport) {
       res.status(404).json({ error: "Not found", code: "NOT_FOUND" });
       return;
     }
 
-    const report = (row.resultJson ?? {}) as Record<string, unknown>;
+    const report = ownedReport;
     const requestedAddress = stringValue((req.query as Record<string, unknown>)["address"]);
-    const resolved = resolveSitePlanAddress(report, typeof row.address === "string" ? row.address : null, requestedAddress);
+    const resolved = resolveSitePlanAddress(report, ownedAddress, requestedAddress);
     if (resolved.forbidden) {
       res.status(404).json({ error: "Not found", code: "NOT_FOUND" });
       return;

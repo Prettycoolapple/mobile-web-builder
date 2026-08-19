@@ -2768,12 +2768,16 @@ export function FeasibilityReportCard({ report, onFollowUp, onFastTrackLodgement
     }
   }, [report.historyId, isRefreshingPhotos, getApiHeaders]);
 
+  // Same owning-record id the Plan tab resolves — a guest's report is owned by
+  // its feasibility job rather than a history row, and prefetching against the
+  // wrong one would warm a cache key the card never reads.
+  const sitePlanOwnerId = report.historyId ?? report.guestJobId ?? null;
   useEffect(() => {
-    if (!report.historyId) return;
-    void prefetchSitePlanAssets(queryClient, report.historyId, report.address, getApiHeaders()).catch(() => {
+    if (!sitePlanOwnerId) return;
+    void prefetchSitePlanAssets(queryClient, sitePlanOwnerId, report.address, getApiHeaders()).catch(() => {
       // The Plan tab still owns visible error and retry UI.
     });
-  }, [queryClient, report.historyId, report.address, getApiHeaders]);
+  }, [queryClient, sitePlanOwnerId, report.address, getApiHeaders]);
 
   const bedrooms = report.propertyOverview?.bedrooms;
   const bathrooms = report.propertyOverview?.bathrooms;

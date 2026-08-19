@@ -222,6 +222,14 @@ vi.mock("../../lib/auth", () => ({
     (req as unknown as { userId: string }).userId = state.userId;
     next();
   },
+  // Signed out is a valid caller on the guest-accessible routes: no `userId` is
+  // attached and the handler decides what an anonymous caller may do.
+  optionalAuth: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
+    if (authed.value) {
+      (req as unknown as { userId: string }).userId = state.userId;
+    }
+    next();
+  },
 }));
 
 /**
@@ -375,12 +383,17 @@ describe("POST /rubin-layouts", () => {
     });
   });
 
-  it("requires authentication", async () => {
+  // AI Subdivision is open to guests, and a layout is worth the same to the
+  // corpus whoever produced it. The per-account rows are the part they miss.
+  it("keeps a guest's layout in the corpus but writes no per-account rows", async () => {
     authed.value = false;
     await withServer(async (baseUrl) => {
       const res = await post(baseUrl, savePayload());
-      expect(res.status).toBe(401);
-      expect(state.layouts).toHaveLength(0);
+      expect(res.status).toBe(200);
+      expect(state.layouts).toHaveLength(1);
+      expect(state.layouts[0]?.createdBy ?? null).toBeNull();
+      expect(state.generations).toHaveLength(0);
+      expect(state.userLayouts).toHaveLength(0);
     });
   });
 });
@@ -417,9 +430,38 @@ describe("POST /rubin-layouts/quota", () => {
     });
   });
 
-  it("requires authentication", async () => {
+  // The client treats a failed allowance check as "allowed" so a blip cannot
+  // break the feature. That makes refusing guests here actively harmful: it
+  // would hand every one of them unlimited solver time. They get metered on
+  // their install hash instead, in the same 5/hour window as an account.
+  it("meters a guest on their install id", async () => {
     authed.value = false;
     await withServer(async (baseUrl) => {
+      const guestClaim = () =>
+        fetch(`${baseUrl}/rubin-layouts/quota`, {
+          method: "POST",
+          headers: { "x-anonymous-install-id": "install-abc" },
+        });
+
+      for (let i = 1; i <= 5; i += 1) {
+        expect(await (await guestClaim()).json()).toMatchObject({ allowed: true, used: i });
+      }
+      expect((await (await guestClaim()).json()).allowed).toBe(false);
+
+      // A different install is a different guest, not the same bucket.
+      const other = await fetch(`${baseUrl}/rubin-layouts/quota`, {
+        method: "POST",
+        headers: { "x-anonymous-install-id": "install-xyz" },
+      });
+      expect((await other.json())).toMatchObject({ allowed: true, remaining: 4 });
+    });
+  });
+
+  it("refuses a caller with no identity at all", async () => {
+    authed.value = false;
+    await withServer(async (baseUrl) => {
+      // No token and no install header: nothing to meter against, so this must
+      // not fall through to an uncounted generation.
       expect((await claim(baseUrl)).status).toBe(401);
       expect(quota.counts.size).toBe(0);
     });
@@ -482,11 +524,15 @@ describe("GET /rubin-layouts/latest", () => {
     });
   });
 
-  it("requires authentication", async () => {
+  // Guests keep no per-account current layout, so "nothing to restore" is the
+  // honest answer — and it has to arrive in the same shape a miss uses, or the
+  // Rubin screen's restore fetch takes an error path on every guest open.
+  it("reports no layout for a guest rather than refusing the lookup", async () => {
     authed.value = false;
     await withServer(async (baseUrl) => {
       const res = await latest(baseUrl, `lat=${SITE.lat}&lng=${SITE.lng}`);
-      expect(res.status).toBe(401);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ exists: false });
     });
   });
 });

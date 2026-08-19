@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { requireAuth } from "../lib/auth";
+import { optionalAuth, requireAuth } from "../lib/auth";
 import { ipRateLimit, userRateLimit, minutes, hours } from "../lib/rateLimit";
 import {
   fetchRubinScenario,
@@ -95,9 +95,13 @@ function handleUnexpected(req: Request, res: Response, err: unknown, route: stri
   res.status(500).json({ error: "Subdivision analysis failed" });
 }
 
+// AI Subdivision is free and open to guests as well as signed-in users, so this
+// gate takes `optionalAuth`: a valid token still identifies the caller (and arms
+// `userRateLimit`), but its absence is not a refusal. Guests fall back to the IP
+// velocity cap, which is what bounds this call for them.
 router.post(
   "/subdivision/site",
-  requireAuth,
+  optionalAuth,
   ipRateLimit({ name: "subdivision-site", windowMs: minutes(1), max: 60 }),
   userRateLimit({ name: "subdivision-site", windowMs: minutes(1), max: 30 }),
   async (req: Request, res: Response) => {

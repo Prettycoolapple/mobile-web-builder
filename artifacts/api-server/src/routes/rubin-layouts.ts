@@ -7,8 +7,23 @@ import {
   rubinLayouts,
   rubinUserLayouts,
 } from "@workspace/db";
-import { requireAuth } from "../lib/auth";
+import { optionalAuth, requireAuth } from "../lib/auth";
+import { getAnonymousInstallHash } from "../lib/anonymous-discovery";
 import { hitRateLimit, hours, ipRateLimit, minutes, userRateLimit } from "../lib/rateLimit";
+
+/**
+ * Who an hourly generate allowance is counted against.
+ *
+ * A signed-in caller is their account; a guest is their hashed install id. The
+ * `guest:` prefix keeps the two key spaces from ever colliding. Null means the
+ * caller offered no identity at all and cannot be metered.
+ */
+function generateQuotaOwner(req: Request): string | null {
+  const userId = (req as unknown as { userId?: string }).userId;
+  if (userId) return userId;
+  const installHash = getAnonymousInstallHash(req.headers as Record<string, unknown>);
+  return installHash ? `guest:${installHash}` : null;
+}
 
 /**
  * Storage for the layouts Rubin generates inside the app's WebView.
@@ -108,16 +123,24 @@ function readSite(raw: unknown): SiteInput | null {
  */
 router.post(
   "/rubin-layouts/quota",
-  requireAuth,
+  optionalAuth,
   // Velocity limits on top of the allowance itself: the allowance is meant to
   // be *reached* by ordinary use, so it cannot double as abuse protection.
   ipRateLimit({ name: "rubin-generate-quota", windowMs: minutes(1), max: 60 }),
   userRateLimit({ name: "rubin-generate-quota", windowMs: minutes(1), max: 20 }),
   async (req: Request, res: Response) => {
-    const userId = (req as unknown as { userId: string }).userId;
+    // Guests get the same hourly allowance, counted against their install hash.
+    // This has to answer for them: the client treats a failed check as "allowed"
+    // (see `answerGeneratePermission`), so a 401 here would hand every guest
+    // unlimited solver time rather than capping it.
+    const owner = generateQuotaOwner(req);
+    if (!owner) {
+      res.status(401).json({ error: "Authentication required", code: "UNAUTHORIZED" });
+      return;
+    }
     const windowMs = hours(1);
 
-    const hit = await hitRateLimit(`rubin-generate:${userId}`, GENERATE_LIMIT_PER_HOUR, windowMs);
+    const hit = await hitRateLimit(`rubin-generate:${owner}`, GENERATE_LIMIT_PER_HOUR, windowMs);
 
     // Fixed windows are aligned to the hour, so the reset is a property of the
     // clock rather than of when this user started — compute it either way so
@@ -139,9 +162,12 @@ router.post(
   },
 );
 
+// Guests generate layouts too, and a layout is worth the same to the corpus
+// whoever produced it — so the save is open, and only the per-account
+// bookkeeping below is skipped for them.
 router.post(
   "/rubin-layouts",
-  requireAuth,
+  optionalAuth,
   // A layout costs minutes of solver time to produce, so a genuine user cannot
   // reach these. They exist to stop a broken retry loop or a scripted client
   // from filling the corpus with junk.
@@ -149,7 +175,7 @@ router.post(
   userRateLimit({ name: "rubin-layout-save", windowMs: minutes(1), max: 10 }),
   userRateLimit({ name: "rubin-layout-save-hr", windowMs: hours(1), max: 120 }),
   async (req: Request, res: Response) => {
-    const userId = (req as unknown as { userId: string }).userId;
+    const userId = (req as unknown as { userId?: string }).userId ?? null;
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const site = readSite(body.site);
@@ -234,17 +260,24 @@ router.post(
         }
         if (!layoutId) throw new Error("layout row vanished between insert and select");
 
-        // Always written, dedup or not — this is the only record that the run
-        // happened at all.
-        await tx.insert(rubinLayoutGenerations).values({ layoutId, userId, source: "embed" });
+        // Both of these are keyed on a profile id, so a guest run contributes
+        // its layout to the corpus above but leaves no attribution row and no
+        // "current layout" to restore later. Giving guests those would mean a
+        // second owner column on each table and a primary-key change on
+        // rubin_user_layouts — worth doing deliberately, not as a side effect.
+        if (userId) {
+          // Always written, dedup or not — this is the only record that the run
+          // happened at all.
+          await tx.insert(rubinLayoutGenerations).values({ layoutId, userId, source: "embed" });
 
-        await tx
-          .insert(rubinUserLayouts)
-          .values({ userId, siteKey, geoKey, layoutId, updatedAt: new Date() })
-          .onConflictDoUpdate({
-            target: [rubinUserLayouts.userId, rubinUserLayouts.siteKey],
-            set: { layoutId, geoKey, updatedAt: new Date() },
-          });
+          await tx
+            .insert(rubinUserLayouts)
+            .values({ userId, siteKey, geoKey, layoutId, updatedAt: new Date() })
+            .onConflictDoUpdate({
+              target: [rubinUserLayouts.userId, rubinUserLayouts.siteKey],
+              set: { layoutId, geoKey, updatedAt: new Date() },
+            });
+        }
 
         return { layoutId, deduped };
       });
@@ -259,11 +292,19 @@ router.post(
 
 router.get(
   "/rubin-layouts/latest",
-  requireAuth,
+  optionalAuth,
   ipRateLimit({ name: "rubin-layout-latest", windowMs: minutes(1), max: 120 }),
   userRateLimit({ name: "rubin-layout-latest", windowMs: minutes(1), max: 60 }),
   async (req: Request, res: Response) => {
-    const userId = (req as unknown as { userId: string }).userId;
+    const userId = (req as unknown as { userId?: string }).userId ?? null;
+    // Guests keep no per-account current layout (see the save route), so there
+    // is nothing to restore. The same "no saved layout" shape the lookup below
+    // returns, rather than a 401, so the Rubin screen's parallel restore fetch
+    // takes its normal miss path instead of an error path.
+    if (!userId) {
+      res.json({ exists: false });
+      return;
+    }
     const lat = Number(req.query.lat);
     const lng = Number(req.query.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
