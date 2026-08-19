@@ -1564,7 +1564,10 @@ router.get("/admin/stats/global-counts", requireAdmin, async (req, res) => {
       general_free_ai_subdivision_completions: string;
     }>(sql`
       SELECT
-        (SELECT COUNT(*) FROM feasibility_jobs) AS total_reports,
+        -- Account activity only. feasibility_jobs also holds guest-owned jobs
+        -- (user_id NULL, owned by guest_hash) since guests gained background
+        -- analyses; counting those here would silently redefine the metric.
+        (SELECT COUNT(*) FROM feasibility_jobs WHERE user_id IS NOT NULL) AS total_reports,
         (SELECT COUNT(*) FROM agent_call_events) AS total_agent_calls,
         (SELECT COUNT(*) FROM ai_subdivision_interest_events WHERE funnel_version = 1) AS total_ai_subdivision_interest,
         (SELECT COUNT(*) FROM ai_subdivision_interest_events WHERE funnel_version = 1 AND completed_at IS NOT NULL) AS total_ai_subdivision_completions,
@@ -1614,6 +1617,7 @@ router.get("/admin/stats/top-addresses", requireAdmin, async (req, res) => {
         COUNT(*) AS count
       FROM feasibility_jobs
       WHERE COALESCE(NULLIF(TRIM(analysis_address), ''), query_address) IS NOT NULL
+        AND user_id IS NOT NULL
       GROUP BY address
       ORDER BY count DESC, address ASC
       LIMIT ${limit} OFFSET ${offset}
@@ -1625,6 +1629,7 @@ router.get("/admin/stats/top-addresses", requireAdmin, async (req, res) => {
         SELECT LOWER(TRIM(COALESCE(NULLIF(TRIM(analysis_address), ''), query_address))) AS address
         FROM feasibility_jobs
         WHERE COALESCE(NULLIF(TRIM(analysis_address), ''), query_address) IS NOT NULL
+          AND user_id IS NOT NULL
         GROUP BY address
       ) t
     `);

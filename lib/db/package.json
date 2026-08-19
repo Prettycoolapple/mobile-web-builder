@@ -19,6 +19,7 @@
     "add-rate-limit-counters": "node ./scripts/add-rate-limit-counters.mjs",
     "add-abuse-detection": "node ./scripts/add-abuse-detection.mjs",
     "allow-guest-property-shares": "node ./scripts/allow-guest-property-shares.mjs",
+    "allow-guest-feasibility-jobs": "node ./scripts/allow-guest-feasibility-jobs.mjs",
     "add-screening-jobs": "node ./scripts/add-screening-jobs.mjs",
     "add-phone-registration-limits": "node ./scripts/add-phone-registration-limits.mjs",
     "add-phone-line-type-cache": "node ./scripts/add-phone-line-type-cache.mjs",

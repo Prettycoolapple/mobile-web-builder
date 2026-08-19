@@ -140,7 +140,8 @@ function withGroupHistoryMetadata(
 
 type BackgroundAnalyseJob = {
   jobId: string;
-  userId: string;
+  /** Null for a guest's job — the server authorises those by install id instead. */
+  userId: string | null;
   sessionId: string;
   address: string;
   createdAt: number;
@@ -401,7 +402,7 @@ async function readBackgroundAnalyseJobs(): Promise<BackgroundAnalyseJob[]> {
       job &&
       typeof job === "object" &&
       typeof job.jobId === "string" &&
-      typeof job.userId === "string" &&
+      (typeof job.userId === "string" || job.userId === null) &&
       typeof job.sessionId === "string" &&
       typeof job.address === "string" &&
       typeof job.createdAt === "number",
@@ -686,6 +687,9 @@ export default function SearchScreen() {
   const [analyseDisclaimerDontRemind, setAnalyseDisclaimerDontRemind] = useState(false);
   const [analyseDisclaimerDismissed, setAnalyseDisclaimerDismissed] = useState(false);
   const [guestAnalysisPromptVisible, setGuestAnalysisPromptVisible] = useState(false);
+  // "signin" — analysis needs an account outright (e.g. a shared report).
+  // "limit"  — the guest's free monthly reports are used up.
+  const [guestAnalysisPromptVariant, setGuestAnalysisPromptVariant] = useState<"signin" | "limit">("signin");
   const [pendingLimTitleConsent, setPendingLimTitleConsent] = useState<PendingLimTitleConsent | null>(null);
   const [limTitleConsentSending, setLimTitleConsentSending] = useState(false);
   const [limTitleConfirmationVisible, setLimTitleConfirmationVisible] = useState(false);
@@ -838,6 +842,18 @@ export default function SearchScreen() {
 
   const promptSignInForAnalysis = useCallback(async (action: PendingAnalyseAction) => {
     await AsyncStorage.setItem(PENDING_GUEST_ANALYSE_ACTION_KEY, JSON.stringify(action)).catch(() => {});
+    setGuestAnalysisPromptVariant("signin");
+    setGuestAnalysisPromptVisible(true);
+  }, []);
+
+  /**
+   * Shown the first time a guest is refused a report — they have quietly used
+   * the whole free allowance and now hear about it once, as an invitation to
+   * register. The refused request is stored so signing up runs it immediately.
+   */
+  const promptRegisterForMoreReports = useCallback(async (action: PendingAnalyseAction) => {
+    await AsyncStorage.setItem(PENDING_GUEST_ANALYSE_ACTION_KEY, JSON.stringify(action)).catch(() => {});
+    setGuestAnalysisPromptVariant("limit");
     setGuestAnalysisPromptVisible(true);
   }, []);
 
@@ -1864,12 +1880,14 @@ export default function SearchScreen() {
     [appendAssistantTextOnce],
   );
 
+  // Guests queue background jobs too — their report survives a backgrounded app
+  // or a dropped connection exactly like a signed-in user's does.
   const trackBackgroundAnalyseJob = useCallback(
     async (jobId: string | null | undefined, sessionId: string, address: string) => {
-      if (!jobId || !user?.id) return;
+      if (!jobId) return;
       await upsertBackgroundAnalyseJob({
         jobId,
-        userId: user.id,
+        userId: user?.id ?? null,
         sessionId,
         address,
         createdAt: Date.now(),
@@ -1906,11 +1924,14 @@ export default function SearchScreen() {
 
   const backgroundJobPollInFlightRef = useRef(false);
   const pollBackgroundAnalyseJobs = useCallback(async () => {
-    if (!user?.id || backgroundJobPollInFlightRef.current) return;
+    if (backgroundJobPollInFlightRef.current) return;
     backgroundJobPollInFlightRef.current = true;
     try {
       const stored = await readBackgroundAnalyseJobs();
-      const jobs = stored.filter((job) => job.userId === user.id);
+      // Signing in mid-run leaves the guest job unpollable (the server would no
+      // longer match it), so only ever poll jobs queued under the current identity.
+      const currentOwner = user?.id ?? null;
+      const jobs = stored.filter((job) => (job.userId ?? null) === currentOwner);
       for (const job of jobs) {
         if (resolvedBackgroundJobIdsRef.current.has(job.jobId)) {
           await removeBackgroundAnalyseJob(job.jobId);
@@ -2317,8 +2338,9 @@ export default function SearchScreen() {
     user?.id,
   ]);
 
+  // Runs for guests as well as signed-in users; background screening stays
+  // signed-in only and no-ops for guests through its own guard.
   useEffect(() => {
-    if (!user?.id) return;
     void pollBackgroundAnalyseJobs();
     void pollBackgroundScreeningJobs();
     const jobReadySub = DeviceEventEmitter.addListener("projectAlpha:backgroundJobsReady", () => {
@@ -2368,10 +2390,8 @@ export default function SearchScreen() {
     if (isLoading) return;
     const visibleText = (displayText ?? text).trim();
     const detectedMode = detectClientMode(text);
-    if (!user && detectedMode === "analyse") {
-      await promptSignInForAnalysis({ type: "send", text });
-      return;
-    }
+    // Guests analyse too — the server meters their free monthly reports and
+    // tells us when to ask them to register, so there is no gate here.
     if (!skipAnalyseDisclaimer && detectedMode === "analyse" && shouldShowAnalyseDisclaimer()) {
       openAnalyseDisclaimer({ type: "send", text });
       return;
@@ -2697,7 +2717,10 @@ export default function SearchScreen() {
     ];
     const headers = getApiHeaders();
 
-    const useBackgroundAnalyse = detectedMode === "analyse" && Boolean(user) && Platform.OS !== "web";
+    // Guests queue background feasibility jobs too — the server owns theirs by
+    // install id. Background *screening* stays signed-in only: screening_jobs
+    // still requires a profile.
+    const useBackgroundAnalyse = detectedMode === "analyse" && Platform.OS !== "web";
     const useBackgroundScreening = detectedMode === "discover" && Boolean(user) && Platform.OS !== "web";
     let providerReportSnapshot: FeasibilityReport | null = null;
     let deferProviderCheckUntilBackgroundResult = false;
@@ -2789,6 +2812,24 @@ export default function SearchScreen() {
             return;
           }
           if (r.status === 401) {
+            const err = await r.json().catch(() => ({} as { error?: string; code?: string; message?: string }));
+            const code = (err as { code?: string })?.code;
+            // A guest out of free reports isn't an expired session — it's the
+            // one moment we ask them to register. Mirrors the /chat fallback
+            // below and the analyse-button path.
+            if (!user && (code === "GUEST_REPORT_LIMIT_REACHED" || code === "AUTH_REQUIRED")) {
+              const limitReached = code === "GUEST_REPORT_LIMIT_REACHED";
+              updateLastMessage({
+                type: "text",
+                content:
+                  (err as { message?: string })?.message
+                  || t(limitReached ? "guest_report_limit.body" : "guest_analysis.body"),
+              }, sessionId);
+              setIsLoading(false);
+              if (limitReached) await promptRegisterForMoreReports({ type: "send", text });
+              else await promptSignInForAnalysis({ type: "send", text });
+              return;
+            }
             updateLastMessage({ type: "text", content: t("search.session_expired") }, sessionId);
             return;
           }
@@ -2963,6 +3004,12 @@ export default function SearchScreen() {
               err = errBody ? JSON.parse(errBody) : {};
             } catch {
               err = { error: errBody.slice(0, 200) || `HTTP ${resp.status}` };
+            }
+            if (resp.status === 401 && err.code === "GUEST_REPORT_LIMIT_REACHED" && !user) {
+              updateLastMessage({ type: "text", content: err.message || t("guest_report_limit.body") }, sessionId);
+              setIsLoading(false);
+              await promptRegisterForMoreReports({ type: "send", text });
+              return;
             }
             if (resp.status === 401 && err.code === "AUTH_REQUIRED" && !user) {
               updateLastMessage({ type: "text", content: err.message || t("guest_analysis.body") }, sessionId);
@@ -3347,6 +3394,7 @@ export default function SearchScreen() {
     shouldShowAnalyseDisclaimer,
     openAnalyseDisclaimer,
     promptSignInForAnalysis,
+    promptRegisterForMoreReports,
     user?.role,
     user?.subscriptionTier,
     user,
@@ -3415,10 +3463,8 @@ export default function SearchScreen() {
       addressConfirmed = false,
     ) => {
       if (isLoading) return;
-      if (!user) {
-        await promptSignInForAnalysis({ type: "analyse", address, selectedPhotoUrl, selectedListingUrl, selectedListingContext, analysisKey, addressConfirmed });
-        return;
-      }
+      // No guest gate: the server decides whether this guest still has a free
+      // report left, and answers with GUEST_REPORT_LIMIT_REACHED when they don't.
       if (!skipAnalyseDisclaimer && shouldShowAnalyseDisclaimer()) {
         openAnalyseDisclaimer({ type: "analyse", address, selectedPhotoUrl, selectedListingUrl, selectedListingContext, analysisKey, addressConfirmed });
         return;
@@ -3494,6 +3540,31 @@ export default function SearchScreen() {
               return;
             }
             if (resp.status === 401) {
+              const err = await resp.json().catch(() => ({} as { error?: string; code?: string; message?: string }));
+              const code = (err as { code?: string })?.code;
+              // A guest out of free reports isn't an expired session — it's the
+              // one moment we ask them to register.
+              if (!user && (code === "GUEST_REPORT_LIMIT_REACHED" || code === "AUTH_REQUIRED")) {
+                const limitReached = code === "GUEST_REPORT_LIMIT_REACHED";
+                updateLastMessage({
+                  type: "text",
+                  content:
+                    (err as { message?: string })?.message
+                    || t(limitReached ? "guest_report_limit.body" : "guest_analysis.body"),
+                }, sessionId);
+                const pending: PendingAnalyseAction = {
+                  type: "analyse",
+                  address,
+                  selectedPhotoUrl,
+                  selectedListingUrl,
+                  selectedListingContext,
+                  analysisKey,
+                  addressConfirmed,
+                };
+                if (limitReached) await promptRegisterForMoreReports(pending);
+                else await promptSignInForAnalysis(pending);
+                return;
+              }
               updateLastMessage({ type: "text", content: t("search.session_expired") }, sessionId);
               return;
             }
@@ -3613,6 +3684,7 @@ export default function SearchScreen() {
       shouldShowAnalyseDisclaimer,
       openAnalyseDisclaimer,
       promptSignInForAnalysis,
+      promptRegisterForMoreReports,
       scrollToNewestMessage,
       t,
       user,
@@ -3715,9 +3787,11 @@ export default function SearchScreen() {
       const token = await getPendingShareToken().catch(() => null);
       if (!token || !searchScreenMountedRef.current) return;
 
-      // Feasibility analysis requires an account. Keep the share token intact
-      // while the existing auth prompt sends the recipient through login or
-      // signup; the user transition re-runs this effect afterwards.
+      // Opening someone else's shared report still requires an account, unlike
+      // a guest's own address lookups — the share payload is another user's
+      // work product. Keep the share token intact while the auth prompt sends
+      // the recipient through login or signup; the user transition re-runs this
+      // effect afterwards.
       if (!user) {
         const promptKey = `${token}:${String(shareCheckNonce ?? "initial")}`;
         if (promptedGuestShareRef.current !== promptKey) {
@@ -3725,6 +3799,7 @@ export default function SearchScreen() {
           // A shared property is the authoritative post-login action. Prevent
           // an older guest analysis request from racing it after authentication.
           await AsyncStorage.removeItem(PENDING_GUEST_ANALYSE_ACTION_KEY).catch(() => {});
+          setGuestAnalysisPromptVariant("signin");
           setGuestAnalysisPromptVisible(true);
         }
         return;
@@ -4760,20 +4835,31 @@ export default function SearchScreen() {
           <View style={styles.guestPromptCenter}>
             <View style={[styles.guestPromptCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <View style={[styles.guestPromptIcon, { backgroundColor: colors.accent + "18" }]}>
-                <Feather name="lock" size={20} color={colors.accent} />
+                <Feather
+                  name={guestAnalysisPromptVariant === "limit" ? "unlock" : "lock"}
+                  size={20}
+                  color={colors.accent}
+                />
               </View>
               <Text style={[styles.guestPromptTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-                {t("guest_analysis.title")}
+                {t(guestAnalysisPromptVariant === "limit" ? "guest_report_limit.title" : "guest_analysis.title")}
               </Text>
               <Text style={[styles.guestPromptBody, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                {t("guest_analysis.body")}
+                {t(guestAnalysisPromptVariant === "limit" ? "guest_report_limit.body" : "guest_analysis.body")}
               </Text>
               <View style={styles.guestPromptBenefits}>
-                {[
-                  "guest_analysis.benefit_analysis",
-                  "guest_analysis.benefit_history",
-                  "guest_analysis.benefit_security",
-                ].map((key) => (
+                {(guestAnalysisPromptVariant === "limit"
+                  ? [
+                    "guest_report_limit.benefit_more",
+                    "guest_report_limit.benefit_history",
+                    "guest_report_limit.benefit_watchlist",
+                  ]
+                  : [
+                    "guest_analysis.benefit_analysis",
+                    "guest_analysis.benefit_history",
+                    "guest_analysis.benefit_security",
+                  ]
+                ).map((key) => (
                   <View key={key} style={styles.guestPromptBenefitRow}>
                     <View style={[styles.guestPromptBenefitIcon, { backgroundColor: colors.accent + "16" }]}>
                       <Feather name="check" size={12} color={colors.accent} />

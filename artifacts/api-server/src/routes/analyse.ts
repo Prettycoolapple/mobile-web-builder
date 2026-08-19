@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { db, profiles, searches, feasibilityJobs, screeningJobs, salesAgentProfiles, listings, discoveryContinuations, propertyCache, withDbRetry, type DiscoveryContinuationState } from "@workspace/db";
 import { agentAiUnlimited } from "../lib/agent-entitlements";
 import { logger } from "../lib/logger";
@@ -168,6 +168,14 @@ import {
   recordAnonymousDiscoveryEvent,
   recordShownForAnonymous,
 } from "../lib/anonymous-discovery";
+import {
+  checkGuestReportQuota,
+  guestIdentityFromHashes,
+  guestIdentityFromRequest,
+  recordGuestReport,
+  type GuestIdentity,
+} from "../lib/guest-reports";
+import { canReadFeasibilityJob } from "../lib/guest-jobs";
 import type { Logger } from "pino";
 
 type ReqLike = { headers: Record<string, string | string[] | undefined> };
@@ -3545,6 +3553,50 @@ async function rejectAuthRequired(res: any, locale: ReturnType<typeof normaliseL
   });
 }
 
+/**
+ * A guest has used up their free feasibility reports. Deliberately says nothing
+ * about *when* the allowance refreshes — the account is the offer, not a wait.
+ *
+ * Sent as 401 (not 402) so clients route it to the register/sign-in prompt
+ * rather than the subscription paywall. `AUTH_REQUIRED` stays the fallback code
+ * for app builds that shipped before this limit existed.
+ */
+async function rejectGuestReportLimit(
+  res: any,
+  locale: ReturnType<typeof normaliseLocale>,
+  quota: { used: number; limit: number },
+): Promise<void> {
+  const baseMessage =
+    "You've used all your free guest reports. Create a free account to unlock more feasibility reports every month.";
+  const message = locale === "zh" ? await ensureChinese(baseMessage) : baseMessage;
+  res.status(401).json({
+    error: message,
+    code: "GUEST_REPORT_LIMIT_REACHED",
+    fallbackCode: "AUTH_REQUIRED",
+    message,
+    reportsUsed: quota.used,
+    limit: quota.limit,
+  });
+}
+
+/**
+ * Charge one report against a guest's allowance, once the report has actually
+ * been produced. Awaited (a single row insert) so the count is accurate even if
+ * the serverless invocation is frozen straight after the response, but never
+ * allowed to fail the request — an uncounted report is a much smaller problem
+ * than erroring on one the visitor already has.
+ *
+ * No-ops for signed-in users, who are metered on `reports_used_this_month`.
+ */
+async function noteGuestReport(identity: GuestIdentity | null, log: FeasibilityLog): Promise<void> {
+  if (!identity) return;
+  try {
+    await recordGuestReport(identity);
+  } catch (err) {
+    log.warn({ err }, "Failed to record guest report usage");
+  }
+}
+
 async function getUserIdFromHeader(req: any): Promise<string | null | typeof INVALID_AUTH_SESSION> {
   const authHeader = req.headers.authorization as string | undefined;
   if (!authHeader?.startsWith("Bearer ")) return null;
@@ -3600,18 +3652,31 @@ function screeningJobDeadline(): Date {
   return new Date(Date.now() + SCREENING_JOB_RUNTIME_MS);
 }
 
+/**
+ * An in-flight job for the same address by the same owner, so a retry (or a
+ * second tap) rejoins the run already under way instead of starting a rival
+ * pipeline. `guestHash` is only ever set on guest jobs and `userId` only on
+ * signed-in ones, so matching either column alone identifies the owner.
+ */
 async function findReusableFeasibilityJob(args: {
-  userId: string;
+  userId: string | null;
+  guestHash: string | null;
   queryAddress: string;
   analysisAddress: string;
 }): Promise<{ id: string; status: string } | null> {
+  const owner = args.userId
+    ? eq(feasibilityJobs.userId, args.userId)
+    : args.guestHash
+      ? eq(feasibilityJobs.guestHash, args.guestHash)
+      : null;
+  if (!owner) return null;
   const rows = await withDbRetry(() =>
     db
       .select({ id: feasibilityJobs.id, status: feasibilityJobs.status })
       .from(feasibilityJobs)
       .where(
         and(
-          eq(feasibilityJobs.userId, args.userId),
+          owner,
           eq(feasibilityJobs.queryAddress, args.queryAddress),
           eq(feasibilityJobs.analysisAddress, args.analysisAddress),
           sql`${feasibilityJobs.status} in ('pending', 'processing')`,
@@ -4957,17 +5022,36 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
           log,
           notifyWhenReady: false,
         });
-    await withDbRetry(() =>
+    // Guests have no `searches` row to read the finished report back from, so
+    // it is parked on the job itself. Signed-in jobs keep pointing at history.
+    const guestResultJson = job.userId
+      ? null
+      : ("reportGroup" in result
+          ? (result.reportGroup as unknown as Record<string, unknown>)
+          : (result.report as Record<string, unknown>));
+    // Completing conditionally makes this the one moment a job can transition
+    // to "completed". A stale job that gets picked up a second time still
+    // rewrites the result, but only the winning update charges the guest.
+    const completed = await withDbRetry(() =>
       db
         .update(feasibilityJobs)
         .set({
           status: "completed",
           searchId: result.savedSearchId,
+          resultJson: guestResultJson,
           updatedAt: new Date(),
         })
-        .where(eq(feasibilityJobs.id, jobId)),
+        .where(and(eq(feasibilityJobs.id, jobId), ne(feasibilityJobs.status, "completed")))
+        .returning({ id: feasibilityJobs.id }),
     );
-    if (result.savedSearchId) {
+    // Mirrors the sync path, which charges a guest only once a report exists.
+    if (completed.length > 0 && !job.userId && job.guestHash) {
+      await recordGuestReport({ installHash: job.guestHash, ipHash: job.guestIpHash }).catch((err) =>
+        log.warn({ err }, "Failed to record guest report usage for background job"),
+      );
+    }
+    if (job.userId && result.savedSearchId) {
+      const notifyUserId = job.userId;
       const shortAddr = job.queryAddress.length > 90 ? `${job.queryAddress.slice(0, 87)}…` : job.queryAddress;
       const pushTitle = locale === "zh" ? "分析报告已就绪" : "Report ready";
       const pushBody =
@@ -4976,7 +5060,7 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
           : `Your analysis for ${shortAddr} is ready — open the app to view it.`;
       try {
         await createNotificationItem({
-          userId: job.userId,
+          userId: notifyUserId,
           kind: "report_ready",
           sourceId: result.savedSearchId,
           page: "history",
@@ -4984,8 +5068,8 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
           body: pushBody,
           metadata: { searchId: result.savedSearchId, jobId, address: job.analysisAddress },
         });
-        const badgeCount = await getUnreadAppBadgeCount(job.userId);
-        void sendPushToUser(job.userId, pushTitle, pushBody, {
+        const badgeCount = await getUnreadAppBadgeCount(notifyUserId);
+        void sendPushToUser(notifyUserId, pushTitle, pushBody, {
           type: "report_ready",
           searchId: result.savedSearchId,
           jobId,
@@ -5041,11 +5125,25 @@ router.post(
     rejectInvalidAuthSession(res);
     return;
   }
+  // Logged-out visitors get a small monthly allowance of full reports. Nothing
+  // is saved to their history (there is no account to save it to) and the
+  // allowance is never advertised — they only hear about it at the point the
+  // next report is refused.
+  const guestIdentity: GuestIdentity | null = userId ? null : guestIdentityFromRequest(req as any);
+  // Ownership of a *background* job needs the real install hash, never the IP
+  // fallback `guestIdentity` accepts: a shared NAT would otherwise let one
+  // visitor poll another's report. A guest with no install header simply keeps
+  // the synchronous path.
+  const guestJobHash = userId ? null : getAnonymousInstallHash(req.headers as Record<string, unknown>);
   if (!userId) {
-    await rejectAuthRequired(res, analyseLocale);
-    return;
+    const quota = await checkGuestReportQuota(guestIdentity);
+    if (!quota.allowed) {
+      await rejectGuestReportLimit(res, analyseLocale, quota);
+      return;
+    }
+  } else {
+    noteUserActivity(userId, req.log);
   }
-  noteUserActivity(userId, req.log);
 
   // Canary honeytokens (Layer 3): a request for a trap address is near-certain
   // scraping. Short-circuit with the fingerprint payload (no pipeline, no quota)
@@ -5251,7 +5349,7 @@ router.post(
         { headers: req.headers as Record<string, string | string[] | undefined> },
         analyseLocale,
       );
-      const wantAsync = Boolean(asyncFlag) && Boolean(userId);
+      const wantAsync = Boolean(asyncFlag) && Boolean(userId || guestJobHash);
       if (wantAsync) {
         const packageHistoryContext = selectedPackageContextFromResolution(combinedPackage);
         const queuedConversationHistory = packageHistoryContext
@@ -5264,7 +5362,8 @@ router.post(
             ]
           : (conversationHistory ?? null);
         const existing = await findReusableFeasibilityJob({
-          userId: userId!,
+          userId,
+          guestHash: guestJobHash,
           queryAddress: address,
           analysisAddress: combinedPackage.packageAddress,
         });
@@ -5280,7 +5379,9 @@ router.post(
           db
             .insert(feasibilityJobs)
             .values({
-              userId: userId!,
+              userId,
+              guestHash: guestJobHash,
+              guestIpHash: guestJobHash ? guestIdentity?.ipHash ?? null : null,
               status: "pending",
               queryAddress: address,
               analysisAddress: combinedPackage.packageAddress,
@@ -5315,6 +5416,8 @@ router.post(
           ?? null,
         packageFacts: combinedPackage.packageFacts ?? null,
       });
+      // One package = one report, however many child addresses it covers.
+      await noteGuestReport(guestIdentity, req.log);
       res.json({
         reportGroup: result.reportGroup,
         type: "combined_listing_group",
@@ -5375,7 +5478,7 @@ router.post(
           ]
         : (conversationHistory ?? []);
 
-    const wantAsync = Boolean(asyncFlag) && Boolean(userId);
+    const wantAsync = Boolean(asyncFlag) && Boolean(userId || guestJobHash);
     if (wantAsync) {
       const translateTitleSchool = translateTitleSchoolFromReq(
         { headers: req.headers as Record<string, string | string[] | undefined> },
@@ -5383,7 +5486,8 @@ router.post(
       );
 
       const existing = await findReusableFeasibilityJob({
-        userId: userId!,
+        userId,
+        guestHash: guestJobHash,
         queryAddress: address,
         analysisAddress,
       });
@@ -5401,7 +5505,9 @@ router.post(
           db
             .insert(feasibilityJobs)
             .values({
-              userId: userId!,
+              userId,
+              guestHash: guestJobHash,
+              guestIpHash: guestJobHash ? guestIdentity?.ipHash ?? null : null,
               status: "pending",
               queryAddress: address,
               analysisAddress,
@@ -5448,6 +5554,7 @@ router.post(
       userId,
       addressSeed: normaliseDiscoveryAddressKey(analysisAddress),
     });
+    await noteGuestReport(guestIdentity, req.log);
     const postAnalysisAnswers = await buildPostAnalysisAnswersForReport(address, result.report, analyseLocale, req.log);
     res.json({
       report: result.report,
@@ -5477,7 +5584,10 @@ router.get("/analyse/jobs/:jobId", async (req, res) => {
     res.status(400).json({ error: "jobId is required", code: "MISSING_JOB_ID" });
     return;
   }
-  if (!uid) {
+  // Guests poll without a bearer token, so their install hash is the whole
+  // credential — a job id alone must never be enough to read someone's report.
+  const guestHash = uid ? null : getAnonymousInstallHash(req.headers as Record<string, unknown>);
+  if (!uid && !guestHash) {
     res.status(401).json({ error: "Unauthorized", code: "UNAUTHORIZED" });
     return;
   }
@@ -5486,7 +5596,7 @@ router.get("/analyse/jobs/:jobId", async (req, res) => {
       db.select().from(feasibilityJobs).where(eq(feasibilityJobs.id, jobId)).limit(1),
     );
     const job = rows[0];
-    if (!job || job.userId !== uid) {
+    if (!job || !canReadFeasibilityJob(job, { userId: uid, guestHash })) {
       res.status(404).json({ error: "Not found", code: "NOT_FOUND" });
       return;
     }
@@ -5494,16 +5604,20 @@ router.get("/analyse/jobs/:jobId", async (req, res) => {
       runAfterResponse(processFeasibilityJob(job.id, req.log));
     }
 
-    if (job.status === "completed" && job.searchId) {
+    // Signed-in jobs read their report back out of history; guest jobs never
+    // wrote a history row, so the report lives on the job itself.
+    if (job.status === "completed" && (job.searchId || job.resultJson)) {
       const searchId = job.searchId;
-      const srows = await withDbRetry(() =>
-        db
-          .select({ resultJson: searches.resultJson, createdAt: searches.createdAt })
-          .from(searches)
-          .where(eq(searches.id, searchId))
-          .limit(1),
-      );
-      const report = srows[0]?.resultJson as Record<string, unknown> | undefined;
+      const srows = searchId
+        ? await withDbRetry(() =>
+            db
+              .select({ resultJson: searches.resultJson, createdAt: searches.createdAt })
+              .from(searches)
+              .where(eq(searches.id, searchId))
+              .limit(1),
+          )
+        : [];
+      const report = (srows[0]?.resultJson ?? job.resultJson) as Record<string, unknown> | undefined;
       const historyCreatedAt = srows[0]?.createdAt
         ? new Date(srows[0].createdAt as unknown as string).toISOString()
         : null;
@@ -6493,6 +6607,11 @@ router.post(
   const anonymousIdentityHash = chatUserId
     ? null
     : getAnonymousInstallHash(req.headers as Record<string, unknown>) ?? anonymousIpHash;
+  // Guests may run full feasibility analyses from chat too; the same monthly
+  // allowance covers both this route and POST /analyse.
+  const chatGuestIdentity: GuestIdentity | null = chatUserId
+    ? null
+    : guestIdentityFromHashes(anonymousIdentityHash, anonymousIpHash);
   if (chatUserId) {
     try {
       const { allowed, messagesUsed, nearLimit, isFreeLimit, subscriptionRequired } = await checkAndIncrementChatMessages(chatUserId);
@@ -6949,11 +7068,17 @@ router.post(
       }
 
       if (effectiveMode === "analyse" && !chatUserId) {
-        await rejectAuthRequired(res, chatLocale);
-        return;
+        const quota = await checkGuestReportQuota(chatGuestIdentity);
+        if (!quota.allowed) {
+          await rejectGuestReportLimit(res, chatLocale, quota);
+          return;
+        }
       }
 
-      if (!chatUserId && anonymousIdentityHash) {
+      // Analyse turns are metered by the guest report allowance above, not the
+      // daily browse allowance — charging both would let five reports plus five
+      // searches close out a guest's day.
+      if (!chatUserId && anonymousIdentityHash && effectiveMode !== "analyse") {
         try {
           const usage = await checkAndRecordAnonymousUsage({
             installHash: anonymousIdentityHash,
@@ -8504,6 +8629,7 @@ router.post(
               chatLocale,
               chatTranslateTitleSchool,
             );
+            await noteGuestReport(chatGuestIdentity, req.log);
             sendCombinedAnalyseResponse({
               content: translatedContent,
               mode: "analyse",
@@ -8806,6 +8932,7 @@ router.post(
                 chatLocale,
                 chatTranslateTitleSchool,
               );
+              await noteGuestReport(chatGuestIdentity, req.log);
               sendAnalyseResponse({
                 content: deterministicContent,
                 mode: "analyse",
@@ -9226,6 +9353,9 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             const postAnalysisAnswers = parsedForSave != null
               ? await buildPostAnalysisAnswersForReport(userText, parsedForSave, chatLocale, req.log)
               : [];
+            // Only a parseable report is a report; malformed model output costs
+            // the guest nothing.
+            if (parsedForSave != null) await noteGuestReport(chatGuestIdentity, req.log);
             sendAnalyseResponse({
               content: translatedAnalyse,
               mode: analyseResponseMode,

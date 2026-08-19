@@ -389,6 +389,12 @@ const en: Catalog = {
   "guest_analysis.benefit_history": "Save your search and analysis history",
   "guest_analysis.benefit_security": "Keep property reports accessible only to your account",
   "guest_analysis.limit": "You've reached today's guest search limit. Create a free account to keep searching.",
+  // Shown only once a guest has used up their free reports — never before.
+  "guest_report_limit.title": "Unlock more reports",
+  "guest_report_limit.body": "You've used all your free feasibility reports. Create a free account to unlock more reports every month.",
+  "guest_report_limit.benefit_more": "More feasibility reports every month",
+  "guest_report_limit.benefit_history": "Every report saved to your history",
+  "guest_report_limit.benefit_watchlist": "Save properties to your watchlist",
 
   // Error fallback
   "fallback.title": "Something went wrong",
@@ -1647,6 +1653,11 @@ const zh: Catalog = {
   "guest_analysis.benefit_history": "保存您的搜索与分析历史",
   "guest_analysis.benefit_security": "仅通过您的账户访问物业报告",
   "guest_analysis.limit": "今日访客搜索次数已用完。请创建免费账户继续搜索。",
+  "guest_report_limit.title": "解锁更多报告",
+  "guest_report_limit.body": "您的免费可行性报告次数已用完。创建免费账户，即可每月解锁更多报告。",
+  "guest_report_limit.benefit_more": "每月可生成更多可行性报告",
+  "guest_report_limit.benefit_history": "所有报告自动保存至历史记录",
+  "guest_report_limit.benefit_watchlist": "将房源加入收藏清单",
 
   // Error fallback
   "fallback.title": "出错了",
