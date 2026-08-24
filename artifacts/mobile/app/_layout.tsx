@@ -35,6 +35,7 @@ import { ChatProvider } from "@/context/ChatContext";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { DmProvider } from "@/context/DmContext";
 import { NotificationProvider } from "@/context/NotificationContext";
+import { RubinHostProvider } from "@/context/RubinHostContext";
 import { NewsProvider } from "@/context/NewsContext";
 import { WatchlistProvider } from "@/context/WatchlistContext";
 import { getApiBase } from "@/lib/api";
@@ -481,7 +482,9 @@ function RootLayoutNav() {
       <Stack.Screen name="(onboarding)" options={{ headerShown: false }} />
       <Stack.Screen name="add-listing" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="support" options={{ headerShown: false }} />
-      {/* Full-screen Rubin site view; renders its own header + back button. */}
+      {/* Deep-link entry only. The Rubin canvas itself is presented by
+          `RubinHostProvider`, above this navigator — see that file for why it
+          cannot live on a screen. */}
       <Stack.Screen name="rubin" options={{ headerShown: false }} />
       <Stack.Screen name="my-listings" options={{ headerShown: false }} />
       <Stack.Screen name="explore" options={{ headerShown: false }} />
@@ -536,7 +539,12 @@ export default function RootLayout() {
                               <MetaSdkSetup />
                               <NotificationSetup />
                               <ShareLinkSetup />
-                              <RootLayoutNav />
+                              {/* Above the navigator so the Rubin canvas can be
+                                  warmed on one screen and presented over another
+                                  without ever being remounted. */}
+                              <RubinHostProvider>
+                                <RootLayoutNav />
+                              </RubinHostProvider>
                             </KeyboardProvider>
                           </GestureHandlerRootView>
                         </ChatProvider>

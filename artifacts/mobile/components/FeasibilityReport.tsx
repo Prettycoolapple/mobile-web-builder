@@ -28,6 +28,9 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { StarRating } from "@/components/StarRating";
 import { prefetchSitePlanAssets, SitePlanCard } from "@/components/report/SitePlanCard";
+import { subdivisionSiteQueryKey } from "@/components/report/useSubdivision";
+import { useRubinHost } from "@/context/RubinHostContext";
+import { fetchSubdivisionSite } from "@/lib/subdivision";
 import { useWatchlist, type WatchlistCandidate } from "@/context/WatchlistContext";
 import { useColors } from "@/hooks/useColors";
 import { useT, translate, translateForOS, isOSChineseLocale } from "@/lib/i18n";
@@ -2657,6 +2660,7 @@ export function FeasibilityReportCard({ report, onFollowUp, onFastTrackLodgement
   const { isWatched, toggle } = useWatchlist();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { warm: warmRubin } = useRubinHost();
 
   const planningSection = overlayStatus(report);
   const asbestosStatus: "good" | "warning" | "risk" | "neutral" = report.asbestos
@@ -2772,12 +2776,59 @@ export function FeasibilityReportCard({ report, onFollowUp, onFastTrackLodgement
   // its feasibility job rather than a history row, and prefetching against the
   // wrong one would warm a cache key the card never reads.
   const sitePlanOwnerId = report.historyId ?? report.guestJobId ?? null;
+  /**
+   * Everything the Plan tab will need, fetched the moment the report exists —
+   * and then Rubin itself, warmed on the parcel this report is about.
+   *
+   * The site plan first, because it is what yields the parcel centroid: passing
+   * Rubin coordinates instead of an address string is what stops a second
+   * geocode landing on a neighbouring property. Then the subdivision gate, whose
+   * answer is written into the same query cache the Plan tab reads, so opening
+   * that tab no longer waits on it either. Only if the gate says Rubin covers
+   * this parcel does the canvas start loading.
+   *
+   * Deliberately *not* forced: a combined report renders up to four of these at
+   * once and there is exactly one warm slot. First one home takes it, and the
+   * Plan tab hands it to whichever property the user actually opens.
+   *
+   * Every step is best-effort and silent. This is a head start, not a feature:
+   * the Plan tab still owns the visible loading, error and retry UI, and a warm
+   * that never happened costs the user nothing but the wait they used to have.
+   */
   useEffect(() => {
     if (!sitePlanOwnerId) return;
-    void prefetchSitePlanAssets(queryClient, sitePlanOwnerId, report.address, getApiHeaders()).catch(() => {
-      // The Plan tab still owns visible error and retry UI.
-    });
-  }, [queryClient, sitePlanOwnerId, report.address, getApiHeaders]);
+    let cancelled = false;
+
+    void (async () => {
+      const headers = getApiHeaders();
+      const sitePlan = await prefetchSitePlanAssets(
+        queryClient, sitePlanOwnerId, report.address, headers,
+      ).catch(() => null);
+      if (cancelled || !sitePlan) return;
+
+      const target = {
+        address: report.address,
+        lat: sitePlan.center.lat,
+        lng: sitePlan.center.lng,
+      };
+      const gate = await queryClient
+        .fetchQuery({
+          queryKey: subdivisionSiteQueryKey(target),
+          staleTime: 60 * 60 * 1000,
+          queryFn: () => fetchSubdivisionSite(target, headers),
+        })
+        .catch(() => null);
+      if (cancelled || gate?.supported !== true) return;
+
+      // Rubin's own resolved address, for the same reason the coordinates are
+      // preferred: it is the canonical LINZ form for this parcel.
+      warmRubin({ ...target, address: gate.site.address ?? report.address ?? null });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [queryClient, sitePlanOwnerId, report.address, getApiHeaders, warmRubin]);
 
   const bedrooms = report.propertyOverview?.bedrooms;
   const bathrooms = report.propertyOverview?.bathrooms;

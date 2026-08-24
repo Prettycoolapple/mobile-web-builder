@@ -19,7 +19,19 @@ import { getApiBase } from "@/lib/api";
 
 export const RUBIN_BRIDGE_VERSION = 1;
 
+/**
+ * Density stop, as it travels and as it is stored.
+ *
+ * The wire values outlive their labels: Rubin's panel calls them Standard, High
+ * and Max, and they select standard, dense and super-dense subdivision. This
+ * build must not care which — a Rubin deployed next month may relabel or
+ * re-point them, and the `typology` field on `layout-complete` is what actually
+ * names the solver. These three strings are only ever passed through to storage.
+ */
 export type RubinIntensity = "low" | "medium" | "high";
+
+/** Native feedback styles Rubin can ask for while a gesture is in flight. */
+export type RubinHapticStyle = "light" | "medium" | "heavy" | "selection";
 
 export type RubinRunState =
   | "idle"
@@ -59,6 +71,13 @@ export type RubinInboundMessage =
     }
   | { type: "layout-error"; failedState: RubinRunState; message: string }
   | { type: "hydrated"; ok: boolean; message?: string }
+  /**
+   * "Tap the phone." Rubin's density slider ticks as the thumb passes a stop,
+   * and it cannot do that itself — there is no Vibration API in an iOS
+   * WKWebView. Purely advisory: the host taps or it does not, and nothing in
+   * Rubin waits for an answer.
+   */
+  | { type: "haptic"; style: RubinHapticStyle }
   | { type: "generate-permission-request"; requestId: string; intensity: RubinIntensity };
 
 export type RubinOutboundMessage =
@@ -81,6 +100,7 @@ const INBOUND_TYPES = new Set([
   "layout-complete",
   "layout-error",
   "hydrated",
+  "haptic",
   "generate-permission-request",
 ]);
 

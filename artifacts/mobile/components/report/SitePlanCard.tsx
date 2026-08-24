@@ -26,7 +26,6 @@ import Animated, {
 } from "react-native-reanimated";
 import Svg, { Circle, G, Polygon, Polyline } from "react-native-svg";
 
-import { useRouter } from "expo-router";
 
 import { useAuth } from "@/context/AuthContext";
 import type { FeasibilityReport as Report } from "@/context/ChatContext";
@@ -35,6 +34,7 @@ import { useT } from "@/lib/i18n";
 import { translateForOS } from "@/lib/i18n";
 import { getApiBase } from "@/lib/api";
 import { AiSubdivisionIntroModal } from "@/components/report/AiSubdivisionIntroModal";
+import { useRubinHost } from "@/context/RubinHostContext";
 import {
   pointsString,
   projectCoordinate,
@@ -447,7 +447,6 @@ function LayerToggleRow({
 export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSubdivisionNonce = 0 }: Props) {
   const colors = useColors();
   const { t } = useT();
-  const router = useRouter();
   const { getApiHeaders, user } = useAuth();
   const { width: viewportWidth } = useWindowDimensions();
   // The id of whichever record owns this report on the server: a `searches` row
@@ -509,6 +508,7 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
     [sitePlanSettled, searchId, report.address, centerLat, centerLng],
   );
   const subdivision = useSubdivision(subdivisionTarget);
+  const rubinHost = useRubinHost();
 
   // Prefer the address Rubin itself resolved during the gate check — it is the
   // canonical LINZ form for the parcel, so passing it back avoids Rubin
@@ -710,20 +710,44 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
   };
 
   /**
-   * Open Rubin full-screen on this property. Coordinates come from the site
-   * plan already on screen, so Rubin resolves the exact parcel this report was
-   * built from rather than re-geocoding the address string.
+   * The site Rubin should be looking at.
+   *
+   * Coordinates come from the site plan already on screen, so Rubin resolves the
+   * exact parcel this report was built from rather than re-geocoding an address
+   * string onto a neighbour.
    */
+  const rubinTarget = useMemo(
+    () => ({
+      address: rubinAddress ?? null,
+      lat: centerLat ?? null,
+      lng: centerLng ?? null,
+    }),
+    [rubinAddress, centerLat, centerLng],
+  );
+
+  /**
+   * Load Rubin for this property in the background, now.
+   *
+   * The Plan tab being open is the strongest signal there is that this is the
+   * property the user might want a layout for — stronger than the report-level
+   * warm-up in `FeasibilityReport`, which fires for every report including the
+   * three the user is not looking at in a combined group. So this one takes the
+   * warm slot (`force`).
+   *
+   * Gated on `subdivision.available` for the same reason the button is: Rubin
+   * covers Auckland only, and warming a site it will refuse is a wasted page
+   * load. Cheap to call repeatedly — the host ignores a warm for the site it is
+   * already holding.
+   */
+  useEffect(() => {
+    if (!RUBIN_DIRECT_LAUNCH_ENABLED) return;
+    if (!subdivision.available) return;
+    rubinHost.warm(rubinTarget, { force: true });
+  }, [rubinHost, rubinTarget, subdivision.available]);
+
+  /** Bring Rubin to the front on this property, warm or not. */
   const openRubin = () => {
-    router.push({
-      pathname: "/rubin",
-      params: {
-        address: rubinAddress ?? "",
-        ...(centerLat != null && centerLng != null
-          ? { lat: String(centerLat), lng: String(centerLng) }
-          : {}),
-      },
-    });
+    rubinHost.present(rubinTarget);
   };
 
   /** Mark the interest event completed. Analytics only — never blocks the user. */
