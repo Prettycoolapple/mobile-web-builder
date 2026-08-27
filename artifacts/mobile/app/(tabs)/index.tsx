@@ -29,6 +29,7 @@ import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, LoadingHint, PropertyCandidate, SelectedListingContext, ServiceProvider, type CandidateScoreUpdate } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
+import { useRubinHost } from "@/context/RubinHostContext";
 import { useNotifications } from "@/context/NotificationContext";
 import { NewsBellButton } from "@/components/NewsBellButton";
 
@@ -602,6 +603,7 @@ export default function SearchScreen() {
     shareCheck?: string;
   }>();
   const { getApiHeaders, refreshProfile, user } = useAuth();
+  const { warmForAddress: warmRubinForAddress } = useRubinHost();
   const {
     currentSession,
     currentSessionId,
@@ -3473,6 +3475,23 @@ export default function SearchScreen() {
       Keyboard.dismiss();
       setAnalysingPropertyKey(analysisKey ?? (selectedListingUrl || address).trim());
 
+      // Start Rubin's canvas loading NOW, in parallel with the report.
+      //
+      // Every path into this function is a user naming one property and asking
+      // what can be built on it — which is the earliest and strongest signal
+      // there is that they may want a layout, and it arrives minutes before the
+      // report that used to trigger the warm-up. The host resolves the parcel
+      // and drops out silently unless Rubin covers it (Auckland, residential),
+      // so nothing loads for an address that could never offer the button.
+      //
+      // `force`: the user has just moved on to this property, which outranks
+      // whatever a previous report warmed. The host still refuses to pull the
+      // canvas out from under a Rubin the user is currently looking at.
+      //
+      // Fire-and-forget in every sense — the analysis below neither waits for
+      // it nor knows it happened, and the report appears whenever it is ready.
+      warmRubinForAddress(address, { force: true });
+
       const sessionId = forceNewSession ? createSession() : currentSessionId ?? createSession();
 
       addMessage({ role: "user", content: t("search.analyse_prefix", { address }), type: "text" }, sessionId);
@@ -3686,6 +3705,7 @@ export default function SearchScreen() {
       promptSignInForAnalysis,
       promptRegisterForMoreReports,
       scrollToNewestMessage,
+      warmRubinForAddress,
       t,
       user,
     ],

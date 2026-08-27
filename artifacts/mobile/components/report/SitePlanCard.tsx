@@ -715,14 +715,24 @@ export function SitePlanCard({ report, autoOpenAiSubdivision = false, launchAiSu
    * Coordinates come from the site plan already on screen, so Rubin resolves the
    * exact parcel this report was built from rather than re-geocoding an address
    * string onto a neighbour.
+   *
+   * The parcel id is what identifies the SESSION, and it matters here: the
+   * analyse intent warmed this same parcel minutes ago from a geocoded address,
+   * so its coordinates are not these ones. Without the id the `force` warm below
+   * would read as a different site and remount the WebView — throwing away the
+   * canvas this tab exists to open instantly. See `sessionKey` in
+   * RubinHostContext.
    */
+  const rubinParcelId =
+    subdivision.siteResult?.supported === true ? subdivision.siteResult.site.parcelId : null;
   const rubinTarget = useMemo(
     () => ({
       address: rubinAddress ?? null,
       lat: centerLat ?? null,
       lng: centerLng ?? null,
+      parcelId: rubinParcelId,
     }),
-    [rubinAddress, centerLat, centerLng],
+    [rubinAddress, centerLat, centerLng, rubinParcelId],
   );
 
   /**

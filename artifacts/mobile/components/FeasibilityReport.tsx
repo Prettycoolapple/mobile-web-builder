@@ -2821,8 +2821,16 @@ export function FeasibilityReportCard({ report, onFollowUp, onFastTrackLodgement
       if (cancelled || gate?.supported !== true) return;
 
       // Rubin's own resolved address, for the same reason the coordinates are
-      // preferred: it is the canonical LINZ form for this parcel.
-      warmRubin({ ...target, address: gate.site.address ?? report.address ?? null });
+      // preferred: it is the canonical LINZ form for this parcel. The parcel id
+      // is what tells the host this is the site the analyse intent already
+      // warmed — the coordinates cannot, because that warm resolved the parcel
+      // from a geocoded address rather than from this site plan's centre. See
+      // the note on `sessionKey` in RubinHostContext.
+      warmRubin({
+        ...target,
+        address: gate.site.address ?? report.address ?? null,
+        parcelId: gate.site.parcelId,
+      });
     })();
 
     return () => {

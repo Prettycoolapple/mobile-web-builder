@@ -6,6 +6,7 @@ import {
   canRequestSubdivision,
   fetchSubdivisionSite,
   solveSubdivisionScenario,
+  subdivisionSiteQueryKey,
   SUBDIVISION_SCENARIO_IDS,
   SubdivisionError,
   type SubdivisionScenario,
@@ -13,6 +14,10 @@ import {
   type SubdivisionSiteResult,
   type SubdivisionTarget,
 } from "@/lib/subdivision";
+
+// Re-exported: the key moved to `lib/subdivision` so the Rubin host can share it
+// without importing from `components/`, and this is where callers expect it.
+export { subdivisionSiteQueryKey };
 
 /**
  * Drives the AI Subdivision feature: the gating site lookup, then the two
@@ -74,10 +79,6 @@ const IDLE_RUNS: Record<SubdivisionScenarioId, ScenarioRunState> = {
   "max-yield": { status: "idle" },
   "high-end": { status: "idle" },
 };
-
-export function subdivisionSiteQueryKey(target: SubdivisionTarget) {
-  return ["subdivision-site", target.address ?? null, target.lat ?? null, target.lng ?? null] as const;
-}
 
 export function useSubdivision(target: SubdivisionTarget): SubdivisionState {
   const { getApiHeaders } = useAuth();

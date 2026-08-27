@@ -166,6 +166,17 @@ export function canRequestSubdivision(target: SubdivisionTarget): boolean {
   return typeof body.address === "string" || typeof body.lat === "number";
 }
 
+/**
+ * React Query key for the gating `/site` lookup.
+ *
+ * Lives here rather than beside the hook that reads it because the Rubin host —
+ * which warms a canvas long before any report component mounts — needs the same
+ * key, and a context importing from `components/` would be the wrong way round.
+ */
+export function subdivisionSiteQueryKey(target: SubdivisionTarget) {
+  return ["subdivision-site", target.address ?? null, target.lat ?? null, target.lng ?? null] as const;
+}
+
 export async function fetchSubdivisionSite(
   target: SubdivisionTarget,
   headers: Record<string, string>,

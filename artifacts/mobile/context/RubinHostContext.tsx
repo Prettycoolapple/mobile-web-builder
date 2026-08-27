@@ -21,13 +21,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import { useAuth } from "@/context/AuthContext";
 import { useColors } from "@/hooks/useColors";
 import { translateForOS } from "@/lib/i18n";
 import { buildRubinEmbedUrl, getRubinOrigin, hasRubinTarget } from "@/lib/rubin";
+import { fetchSubdivisionSite, subdivisionSiteQueryKey } from "@/lib/subdivision";
 import {
   buildRubinInjection,
   claimRubinGenerateQuota,
@@ -50,11 +51,18 @@ import {
  * the moment the user tapped "Generate layout", so the tap was followed by a
  * spinner every single time.
  *
- * Almost all of that work is knowable earlier. By the time a feasibility report
- * has rendered, the app already knows the exact parcel the user is looking at,
- * and whether Rubin covers it. So the WebView is mounted **then**, off-screen,
- * and loads the site while the user reads their report. The tap that follows
- * does not start a load: it moves an already-drawn canvas on screen.
+ * Almost all of that work is knowable earlier — and the earliest moment it is
+ * knowable is the one the user asks for the report, not the one it arrives. An
+ * address is enough: `warmForAddress` puts it through the subdivision gate,
+ * which answers both "which parcel is this" and "does Rubin cover it", and the
+ * WebView starts loading **while the feasibility analysis is still running**.
+ * By the time the report is on screen the canvas behind it is usually drawn, and
+ * the tap that follows does not start a load: it moves it into view.
+ *
+ * The report-mount and Plan-tab warms are still there behind it, unchanged in
+ * purpose: they cover the reports that never went through this screen's analyse
+ * path, and they re-take the slot for the property the user actually opens out
+ * of a combined group.
  *
  * That only works if the WebView is never remounted, which is exactly what a
  * route cannot promise — pushing `/rubin` mounts a fresh screen with a fresh
@@ -98,6 +106,11 @@ export interface RubinTarget {
   /** Preferred when known: re-geocoding an address can land on a neighbour. */
   lat?: number | null;
   lng?: number | null;
+  /**
+   * LINZ parcel id, from the subdivision gate. The site's real identity — see
+   * {@link sessionKey} — and the key saved layouts are stored under.
+   */
+  parcelId?: string | null;
 }
 
 interface RubinHostApi {
@@ -111,6 +124,17 @@ interface RubinHostApi {
    * a combined report warmed first.
    */
   warm: (target: RubinTarget, options?: { force?: boolean }) => void;
+  /**
+   * The same, from an address alone — for callers that have nothing else yet.
+   *
+   * Resolves the parcel through the subdivision gate first, and warms only if
+   * Rubin covers it. That is the whole point: the caller is the chat screen at
+   * the moment a feasibility analysis is requested, which knows an address
+   * string and no coordinates, and must not open a canvas onto a site Rubin
+   * will refuse. Fire-and-forget — nothing waits on it and every failure is
+   * swallowed.
+   */
+  warmForAddress: (address: string | null | undefined, options?: { force?: boolean }) => void;
   /** Bring Rubin to the front for this site, loading it first if it is not warm. */
   present: (target: RubinTarget) => void;
 }
@@ -140,14 +164,34 @@ interface RubinSession {
 }
 
 /**
- * Identity of a site, to six decimal places (~0.1 m — far finer than a parcel).
+ * Identity of a site — the parcel if we know it, else the point, else the words.
  *
- * Coordinates first: they are what Rubin actually loads from, and two reports of
- * the same property can spell its address differently. Address alone is the
- * fallback for a target that never got a centroid.
+ * ## Why the parcel and not the coordinates
+ *
+ * This key is what decides whether a `warm` is free or throws a loaded canvas
+ * away, so the places that warm one site — the analyse intent, the report mount,
+ * the Plan tab — have to agree on it. They cannot agree on coordinates: each
+ * looks the parcel up from whatever point it has, and Rubin's `/site` reports
+ * back the point it was ASKED about rather than the middle of what it found. So
+ * the intent, which has only an address, gets LINZ's geocode of that address,
+ * while the two later callers get the site plan's centre. Same parcel, different
+ * numbers, and on a coordinate key the second warm would remount the WebView and
+ * discard the load the first one had been running for minutes.
+ *
+ * The parcel id is what all three actually resolved, and it is the same string
+ * every time — it is also what the server stores layouts under. Rubin
+ * synthesises an `nztm:{e},{n}` id for a parcel LINZ gave none, and those ARE
+ * point-derived: two lookups of such a site from different points miss each
+ * other. That is exactly the behaviour this key had before, and it can never
+ * merge two genuinely different sites, so it is left to degrade quietly.
+ *
+ * Six decimal places on the coordinate fallback is ~0.1 m — far finer than a
+ * parcel. Address alone is the last resort, for a target that got neither.
  */
 function sessionKey(target: RubinTarget): string {
-  const { lat, lng, address } = target;
+  const { lat, lng, address, parcelId } = target;
+  const parcel = parcelId?.trim();
+  if (parcel) return `parcel:${parcel}`;
   if (typeof lat === "number" && typeof lng === "number") {
     return `${lat.toFixed(6)},${lng.toFixed(6)}`;
   }
@@ -160,6 +204,7 @@ function normaliseTarget(target: RubinTarget): RubinTarget {
     address: target.address?.trim() ? target.address.trim() : null,
     lat: typeof target.lat === "number" && Number.isFinite(target.lat) ? target.lat : null,
     lng: typeof target.lng === "number" && Number.isFinite(target.lng) ? target.lng : null,
+    parcelId: target.parcelId?.trim() ? target.parcelId.trim() : null,
   };
 }
 
@@ -171,6 +216,7 @@ const HAPTIC_IMPACT: Record<string, Haptics.ImpactFeedbackStyle> = {
 
 export function RubinHostProvider({ children }: { children: React.ReactNode }) {
   const { getApiHeaders } = useAuth();
+  const queryClient = useQueryClient();
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
@@ -245,6 +291,47 @@ export function RubinHostProvider({ children }: { children: React.ReactNode }) {
     [startSession],
   );
 
+  const warmForAddress = useCallback(
+    (address: string | null | undefined, options?: { force?: boolean }) => {
+      const trimmed = address?.trim();
+      if (!trimmed) return;
+
+      void (async () => {
+        try {
+          // Through the query cache, not a bare fetch. Analysing the same
+          // property twice inside the hour reuses the answer instead of paying
+          // for the lookup again, and two calls that overlap are deduped into
+          // one request — while a *repeat* still re-warms, which is what takes
+          // the slot back from whatever the user looked at in between.
+          const gate = await queryClient.fetchQuery({
+            queryKey: subdivisionSiteQueryKey({ address: trimmed }),
+            staleTime: 60 * 60 * 1000,
+            queryFn: () => fetchSubdivisionSite({ address: trimmed }, getApiHeaders()),
+          });
+          if (gate.supported !== true) return;
+          // Rubin's own resolved address and the parcel it landed on, never the
+          // caller's raw string: the address is the canonical LINZ form, and the
+          // parcel id is what makes the later warms for this same site free. See
+          // the note on `sessionKey`.
+          warm(
+            {
+              address: gate.site.address,
+              lat: gate.site.centroid.lat,
+              lng: gate.site.centroid.lng,
+              parcelId: gate.site.parcelId,
+            },
+            options,
+          );
+        } catch {
+          // A head start, not a feature. The Plan tab still owns the visible
+          // loading, error and retry UI, and a warm that never happened costs
+          // the user only the wait they used to have.
+        }
+      })();
+    },
+    [getApiHeaders, queryClient, warm],
+  );
+
   const present = useCallback(
     (target: RubinTarget) => {
       const normalised = normaliseTarget(target);
@@ -312,7 +399,12 @@ export function RubinHostProvider({ children }: { children: React.ReactNode }) {
    * this one is going to be drawn.
    */
   const savedLayout = useQuery({
-    queryKey: ["rubin-layout", session?.target.lat ?? null, session?.target.lng ?? null],
+    queryKey: [
+      "rubin-layout",
+      session?.target.parcelId ?? null,
+      session?.target.lat ?? null,
+      session?.target.lng ?? null,
+    ],
     enabled: Boolean(session && session.target.lat !== null && session.target.lng !== null),
     // A layout only changes when this user generates one, and that arrives
     // through the bridge rather than through this query.
@@ -320,7 +412,16 @@ export function RubinHostProvider({ children }: { children: React.ReactNode }) {
     retry: 1,
     queryFn: () =>
       fetchLatestRubinLayout(
-        { lat: session!.target.lat as number, lng: session!.target.lng as number },
+        {
+          lat: session!.target.lat as number,
+          lng: session!.target.lng as number,
+          // Sent whenever we have it. The server stores a layout under
+          // `parcel:{id}` when the save carried one and falls back to an 11 m
+          // geo key otherwise — so a lookup that omits the id can only match by
+          // coordinate, and this session's coordinates now depend on which
+          // caller warmed it first. The id does not.
+          parcelId: session!.target.parcelId ?? undefined,
+        },
         getApiHeaders(),
       ),
   });
@@ -516,7 +617,10 @@ export function RubinHostProvider({ children }: { children: React.ReactNode }) {
   // top of this file about why a promotion must not resize the canvas.
   const canvasHeight = Math.max(120, windowHeight - headerBlock);
 
-  const api = useMemo<RubinHostApi>(() => ({ warm, present }), [warm, present]);
+  const api = useMemo<RubinHostApi>(
+    () => ({ warm, warmForAddress, present }),
+    [warm, warmForAddress, present],
+  );
 
   const targetIsUsable = session ? hasRubinTarget(session.target) : false;
   const showSpinner = presented && session?.phase === "loading" && targetIsUsable;
