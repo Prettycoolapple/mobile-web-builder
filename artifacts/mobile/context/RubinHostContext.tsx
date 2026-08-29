@@ -37,6 +37,7 @@ import {
   saveRubinLayout,
   type RubinHapticStyle,
   type RubinInboundMessage,
+  type RubinLayoutSummary,
   type RubinSiteIdentity,
 } from "@/lib/rubinBridge";
 
@@ -196,6 +197,23 @@ function sessionKey(target: RubinTarget): string {
     return `${lat.toFixed(6)},${lng.toFixed(6)}`;
   }
   return `addr:${(address ?? "").trim().toLowerCase()}`;
+}
+
+/**
+ * Cache key for a site's saved layout.
+ *
+ * One function rather than two literals because both the lookup and the
+ * post-generation write below have to name the *same* entry, and a key that
+ * drifted by one `?? null` would fail silently — the write would land on an
+ * entry nothing reads, and the restore it exists to fix would still not happen.
+ */
+function layoutQueryKey(target: RubinTarget | null | undefined) {
+  return [
+    "rubin-layout",
+    target?.parcelId ?? null,
+    target?.lat ?? null,
+    target?.lng ?? null,
+  ] as const;
 }
 
 /** Normalised so a session's target cannot carry `undefined` into a URL. */
@@ -399,15 +417,12 @@ export function RubinHostProvider({ children }: { children: React.ReactNode }) {
    * this one is going to be drawn.
    */
   const savedLayout = useQuery({
-    queryKey: [
-      "rubin-layout",
-      session?.target.parcelId ?? null,
-      session?.target.lat ?? null,
-      session?.target.lng ?? null,
-    ],
+    queryKey: layoutQueryKey(session?.target),
     enabled: Boolean(session && session.target.lat !== null && session.target.lng !== null),
     // A layout only changes when this user generates one, and that arrives
-    // through the bridge rather than through this query.
+    // through the bridge rather than through this query — so `persistLayout`
+    // writes the result straight into this entry rather than leaving it to a
+    // refetch that has no trigger to fire it.
     staleTime: 5 * 60 * 1000,
     retry: 1,
     queryFn: () =>
@@ -493,8 +508,41 @@ export function RubinHostProvider({ children }: { children: React.ReactNode }) {
       // Silent by design: the layout is on the canvas in front of the user
       // either way, and the retries have already run.
       if (!saved) console.warn("[rubin] layout save gave up after retries");
+
+      /**
+       * Record the new layout as this site's restorable one.
+       *
+       * The lookup above is fetched once per site and has nothing that would
+       * ever refetch it — no interval, no refocus trigger, and a `staleTime`
+       * that only matters to a refetch that never comes. So without this write
+       * it keeps answering with the "no saved layout" it got *before* this run,
+       * and the next remount of this same session — a Retry, or a `present` on
+       * a session that had quietly failed — rebuilds the canvas empty and asks
+       * for no hydrate. The layout is safely in the database; the host just
+       * never looks, which reads as work lost rather than a stale cache.
+       *
+       * Written from the run we just watched rather than by invalidating, for
+       * two reasons: a refetch would drag the geometry back down over mobile
+       * data seconds after sending it up, and it would be wrong for the two
+       * cases where the server has nothing to give back — a guest, whose save
+       * feeds the corpus but leaves no per-account row, and a save that failed
+       * outright. In both, this canvas holds the only copy of the layout that
+       * exists, which is precisely when a remount must be able to restore it.
+       * Nothing here grants durable storage: the entry lives and dies with this
+       * provider, exactly like the canvas it mirrors.
+       */
+      const restorable: RubinLayoutSummary = {
+        exists: true,
+        layout: message.layout,
+        updatedAt: new Date().toISOString(),
+        lotCount: message.lotCount,
+        intensity: message.intensity,
+        typology: message.typology,
+        solverVersion: message.solverVersion,
+      };
+      queryClient.setQueryData(layoutQueryKey(target), restorable);
     },
-    [getApiHeaders],
+    [getApiHeaders, queryClient],
   );
 
   /**
